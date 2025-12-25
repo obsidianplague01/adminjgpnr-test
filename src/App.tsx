@@ -1,8 +1,11 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
+import { NotificationProvider } from "./context/NotificationContext";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import AppLayout from "./layout/AppLayout";
 import { ScrollToTop } from "./components/common/ScrollToTop";
+import ViewTemplate from "./pages/EmailTemplates/ViewTemplate";
+import AllNotifications from "./pages/Notifications/AllNotifications";
 
 // Auth
 import SignIn from "./pages/Auth/SignIn";
@@ -44,7 +47,6 @@ import CreateTemplate from "./pages/EmailTemplates/CreateTemplate";
 import EditTemplate from "./pages/EmailTemplates/EditTemplate";
 
 // Mail
-import SendMail from "./pages/Mail/SendMail";
 import SendMailWithTemplate from "./pages/Mail/SendMailWithTemplate";
 
 // Analytics
@@ -65,71 +67,77 @@ import NotFound from "./pages/OtherPage/NotFound";
 export default function App() {
   return (
     <AuthProvider>
-      <Router>
-        <ScrollToTop />
-        <Routes>
-          {/* Public Routes */}
-          <Route path="/signin" element={<SignIn />} />
-          <Route path="/signup" element={<SignUp />} />
+      <NotificationProvider>
+        <Router>
+          <ScrollToTop />
+          <Routes>
+            {/* Public Routes */}
+            <Route path="/signin" element={<SignIn />} />
+            <Route path="/signup" element={<SignUp />} />
 
-          {/* Protected Routes */}
-          <Route element={<ProtectedRoute />}>
-            <Route element={<AppLayout />}>
-              <Route index path="/" element={<Home />} />
+            {/* Protected Routes */}
+            <Route element={<ProtectedRoute />}>
+              <Route element={<AppLayout />}>
+                <Route index path="/" element={<Home />} />
 
-              {/* Ticket Management */}
-              <Route path="/tickets/all-orders" element={<AllOrders />} />
-              <Route path="/tickets/active" element={<ActiveTickets />} />
-              <Route path="/tickets/scanned" element={<ScannedTickets />} />
-              <Route path="/tickets/settings" element={<TicketSettings />} />
-              <Route path="/tickets/advanced-settings" element={<AdvancedTicketSettings />} />
-              <Route path="/tickets/create" element={<CreateTicket />} />
-              <Route path="/tickets/edit/:id" element={<EditTicket />} />
-              <Route path="/tickets/view/:id" element={<ViewTicket />} />
+                {/* Notifications */}
+                <Route path="/notifications" element={<AllNotifications />} />
 
-              {/* Scanner */}
-              <Route path="/scanner" element={<TicketScanner />} />
+                {/* Ticket Management */}
+                <Route path="/tickets/all-orders" element={<AllOrders />} />
+                <Route path="/tickets/active" element={<ActiveTickets />} />
+                <Route path="/tickets/scanned" element={<ScannedTickets />} />
+                <Route path="/tickets/settings" element={<TicketSettings />} />
+                <Route path="/tickets/advanced-settings" element={<AdvancedTicketSettings />} />
+                <Route path="/tickets/create" element={<CreateTicket />} />
+                <Route path="/tickets/edit/:id" element={<EditTicket />} />
+                <Route path="/tickets/view/:id" element={<ViewTicket />} />
 
-              {/* Customers */}
-              <Route path="/customers" element={<CustomerManagement />} />
-              <Route path="/customers/edit/:id" element={<EditCustomer />} />
-              <Route path="/customers/view/:id" element={<ViewCustomer />} />
+                {/* Scanner */}
+                <Route path="/scanner" element={<TicketScanner />} />
 
-              {/* Newsletter */}
-              <Route path="/newsletter/subscribers" element={<Subscribers />} />
-              <Route path="/newsletter/subscribers/create" element={<CreateSubscriber />} />
-              <Route path="/newsletter/subscribers/edit/:id" element={<EditSubscriber />} />
-              <Route path="/newsletter/send-campaign" element={<SendCampaign />} />
-              <Route path="/newsletter/templates" element={<EmailTemplates />} />
-              <Route path="/newsletter/history" element={<CampaignHistory />} />
-              <Route path="/newsletter/view-campaign/:id" element={<ViewCampaign />} />
+                {/* Customers */}
+                <Route path="/customers" element={<CustomerManagement />} />
+                <Route path="/customers/edit/:id" element={<EditCustomer />} />
+                <Route path="/customers/view/:id" element={<ViewCustomer />} />
 
-              {/* Email Templates */}
-              <Route path="/email-templates" element={<TemplateList />} />
-              <Route path="/email-templates/create" element={<CreateTemplate />} />
-              <Route path="/email-templates/edit/:id" element={<EditTemplate />} />
+                {/* Newsletter */}
+                <Route path="/newsletter/subscribers" element={<Subscribers />} />
+                <Route path="/newsletter/subscribers/create" element={<CreateSubscriber />} />
+                <Route path="/newsletter/subscribers/edit/:id" element={<EditSubscriber />} />
+                <Route path="/newsletter/send-campaign" element={<SendCampaign />} />
+                <Route path="/newsletter/templates" element={<EmailTemplates />} />
+                <Route path="/newsletter/history" element={<CampaignHistory />} />
+                <Route path="/newsletter/view-campaign/:id" element={<ViewCampaign />} />
 
-              {/* Mail */}
-              <Route path="/mail/send" element={<SendMailWithTemplate />} />
+                {/* Email Templates */}
+                <Route path="/email-templates" element={<TemplateList />} />
+                <Route path="/email-templates/create" element={<CreateTemplate />} />
+                <Route path="/email-templates/view/:id" element={<ViewTemplate />} />
+                <Route path="/email-templates/edit/:id" element={<EditTemplate />} />
 
-              {/* Analytics */}
-              <Route path="/analytics" element={<Analytics />} />
+                {/* Mail */}
+                <Route path="/mail/send" element={<SendMailWithTemplate />} />
 
-              {/* Profile */}
-              <Route path="/profile" element={<Profile />} />
+                {/* Analytics */}
+                <Route path="/analytics" element={<Analytics />} />
 
-              {/* Settings */}
-              <Route path="/settings/general" element={<General />} />
-              <Route path="/settings/email-config" element={<EmailConfig />} />
-              <Route path="/settings/payment" element={<Payment />} />
-              <Route path="/settings/security" element={<Security />} />
+                {/* Profile */}
+                <Route path="/profile" element={<Profile />} />
+
+                {/* Settings */}
+                <Route path="/settings/general" element={<General />} />
+                <Route path="/settings/email-config" element={<EmailConfig />} />
+                <Route path="/settings/payment" element={<Payment />} />
+                <Route path="/settings/security" element={<Security />} />
+              </Route>
             </Route>
-          </Route>
 
-          {/* Fallback Route */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Router>
+            {/* Fallback Route */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Router>
+      </NotificationProvider>
     </AuthProvider>
   );
 }

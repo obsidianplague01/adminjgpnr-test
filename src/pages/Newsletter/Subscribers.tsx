@@ -1,4 +1,3 @@
-// src/pages/Newsletter/Subscribers.tsx
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
@@ -11,6 +10,7 @@ import {
   TableRow,
 } from "../../components/ui/table";
 import Badge from "../../components/ui/badge/Badge";
+import Button from "../../components/ui/button/Button";
 import ConfirmModal from "../../components/ui/ConfirmModal";
 import { useModal } from "../../hooks/useModal";
 
@@ -70,12 +70,37 @@ export default function Subscribers() {
     openModal();
   };
 
+  const handleExport = () => {
+    const headers = ["Name", "Email", "Status", "Subscribed Date", "Source"];
+    const rows = subscribers.map((sub) => [
+      sub.name,
+      sub.email,
+      sub.status,
+      sub.subscribedDate,
+      sub.source,
+    ]);
+
+    let csvContent = headers.join(",") + "\n";
+    rows.forEach((row) => {
+      csvContent += row.map(val => `"${val}"`).join(",") + "\n";
+    });
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `subscribers-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleDeleteConfirm = async () => {
     if (!subscriberToDelete) return;
 
     setIsDeleting(true);
 
-    // Simulate API call
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     setSubscribers(subscribers.filter((s) => s.id !== subscriberToDelete));
@@ -104,31 +129,26 @@ export default function Subscribers() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03]">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                />
+            <Button
+              variant="outline"
+              size="md"
+              onClick={handleExport}
+            >
+              <svg className="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Export List
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
               onClick={() => navigate("/newsletter/subscribers/create")}
-              className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-600"
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
+              <svg className="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               Add Subscriber
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -234,7 +254,6 @@ export default function Subscribers() {
         </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
       <ConfirmModal
         isOpen={isOpen}
         onClose={closeModal}

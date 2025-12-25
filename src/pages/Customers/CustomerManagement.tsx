@@ -13,7 +13,7 @@ import {
 import Badge from "../../components/ui/badge/Badge";
 import { useModal } from "../../hooks/useModal";
 import ConfirmModal from "../../components/ui/ConfirmModal";
-import { emailCustomer } from "../../utils/emailService";
+
 
 interface Customer {
   id: string;
@@ -115,8 +115,8 @@ export default function CustomerManagement() {
   };
 
   const handleEmailCustomer = (customer: Customer) => {
-    emailCustomer(customer.email, customer.name, "Message from JGPNR Paintball");
-  };
+  navigate(`/mail/send?to=${encodeURIComponent(customer.email)}&subject=${encodeURIComponent('Message from JGPNR Paintball')}&body=${encodeURIComponent(`Dear ${customer.name},\n\n`)}`);
+};
 
   return (
     <>

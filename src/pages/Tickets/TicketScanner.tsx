@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
 import PageMeta from "../../components/common/PageMeta";
 import ComponentCard from "../../components/common/ComponentCard";
@@ -6,13 +6,14 @@ import Button from "../../components/ui/button/Button";
 import Badge from "../../components/ui/badge/Badge";
 import BarcodeScanner from "../../components/Scanner/BarcodeScanner";
 import Input from "../../components/form/input/InputField";
-import type { ScanResult } from "../../utils/barcodeScanner";
-import { validateTicketScan, getMockTicketData, ValidationResult } from "../../utils/ticketValidation";
 
-interface ScanRecord extends ValidationResult {
+interface ScanRecord {
   ticketCode: string;
   timestamp: string;
   customerName: string;
+  status: "valid" | "invalid";
+  reason: string;
+  allowEntry: boolean;
 }
 
 export default function TicketScanner() {
@@ -21,48 +22,59 @@ export default function TicketScanner() {
   const [manualCode, setManualCode] = useState("");
   const [recentScans, setRecentScans] = useState<ScanRecord[]>([]);
   const [showCamera, setShowCamera] = useState(false);
-  const [config, setConfig] = useState({ maxScanCount: 2, scanWindowDays: 14 });
 
-  useEffect(() => {
-    const loadConfig = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      setConfig({ maxScanCount: 2, scanWindowDays: 14 });
-    };
-    loadConfig();
-  }, []);
-
-  const processTicketScan = (ticketCode: string) => {
-    const ticketData = getMockTicketData(ticketCode);
-    const validation = validateTicketScan(ticketData, config);
-
-    const scanRecord: ScanRecord = {
-      ...validation,
-      ticketCode,
-      timestamp: new Date().toLocaleString(),
-      customerName: "Customer Name",
-    };
-
-    setScanResult(scanRecord);
-
-    if (validation.allowEntry) {
-      setRecentScans([scanRecord, ...recentScans]);
-      const audio = new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBCly0fPTgjEHGGS66+OlTxELTKXh8bllHgU2jdXyzn0vBSh+zPLaizsKFGCz6OupWBMMSKHf8sFuJAUme8rx3I4+CRZiturjpVIRC0uj4PK8aB8GM5DU8tGAMQYnfsvy2oo5ChRftOrqqVcUC0ii4PK/bSMFKHPO8tiIOQoWY7Xq5KdTEQxJouDyu2kjBjCM0/PNfS8GKH3K8tqLOQoUXrTq66hXFAtIouDyvmwiBShy0fPTgjEHGGS46+KnUREMSqPg8bllHgU1jdTyzn0vBSh+zPLaizsKFGCz6OupWBMMSKHf8sFuJAUme8rx3I4+CRZiturjpVIRC0uj4PK8aB8GM5DU8tGAMQYnfsvy2oo5ChRftOrqqVcUC0ii4PK/bSMFKHPO8tiIOQoWY7Xq5KdTEQxJouDyu2kjBjCM0/PNfS8GKH3K8tqLOQoUXrTq66hXFAtIouDyvmwiBShy0fPTgjEHGGS46+KnUREMSqPg8bllHgU1jdTyzn0vBSh+zPLaizsKFGCz6OupWBMMSKHf8sFuJAUme8rx3I4+CRZiturjpVIRC0uj4PK8aB8GM5DU8tGAMQYnfsvy2oo5ChRftOrqqVcUC0ii4PK/bSMFKHPO8tiIOQoWY7Xq5KdTEQxJouDyu2kjBjCM0/PNfS8GKH3K8tqLOQoUXrTq66hXFAtIouDyvmwiBShy0fPTgjEHGGS46+KnUREMSqPg8bllHgU1jdTyzn0vBSh+zPLaizsKFGCz6OupWBMMSKHf8sFuJAUme8rx3I4+CRZiturjpVIRC0uj4PK8aB8GM5DU8tGAMQYnfsvy2oo5ChRftOrqqVcUC0ii4PK/bSMFKHPO8tiIOQoWY7Xq5KdTEQxJouDyu2kjBjCM0/PNfS8GKH3K8tqLOQoUXrTq66hXFAtIouDyvmwiBShy0fPTgjEHGGS46+KnUREMSqPg8bllHgU1jdTyzn0vBSh+zPLaizsKFGCz6OupWBMMSKHf8sFuJAUme8rx3I4+CRZiturjpVIRC0uj4PK8aB8GM5DU8tGAMQYnfsvy2oo5ChRftOrqqVcUC0ii4PK/bSMFKHPO8tiIOQoWY7Xq5KdTEQxJouDyu2kjBjCM0/PNfS8GKH3K8tqLOQoUXrTq66hXFA==");
-      audio.play().catch(() => {});
-    } else {
-      const audio = new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgA");
-      audio.play().catch(() => {});
+  const validateTicket = (ticketCode: string): ScanRecord => {
+    // Simple validation logic
+    const isValidFormat = /^JGPNR-\d{4}-\d{3}$/.test(ticketCode);
+    
+    if (!isValidFormat) {
+      return {
+        ticketCode,
+        timestamp: new Date().toLocaleString(),
+        customerName: "Unknown",
+        status: "invalid",
+        reason: "Invalid ticket format",
+        allowEntry: false,
+      };
     }
 
-    setTimeout(() => setScanResult(null), 8000);
+    // Mock validation - in production, this would check against database
+    const isValid = Math.random() > 0.3; // 70% chance of valid ticket
+    
+    return {
+      ticketCode,
+      timestamp: new Date().toLocaleString(),
+      customerName: `Customer ${ticketCode.split('-')[2]}`,
+      status: isValid ? "valid" : "invalid",
+      reason: isValid ? "Ticket validated successfully" : "Ticket already used or expired",
+      allowEntry: isValid,
+    };
   };
 
-  const handleScan = (result: ScanResult) => {
+  const processTicketScan = (ticketCode: string) => {
+    const validation = validateTicket(ticketCode);
+    setScanResult(validation);
+    setRecentScans([validation, ...recentScans.slice(0, 9)]);
+
+    // Auto-clear result after 5 seconds
+    setTimeout(() => {
+      setScanResult(null);
+    }, 5000);
+  };
+
+  const handleScan = (result: any) => {
     processTicketScan(result.text);
+    setShowCamera(false);
+    setIsScanning(false);
   };
 
   const handleManualEntry = () => {
-    if (!manualCode.trim()) return;
-    processTicketScan(manualCode);
+    if (!manualCode.trim()) {
+      alert("Please enter a ticket code");
+      return;
+    }
+    
+    processTicketScan(manualCode.trim());
     setManualCode("");
   };
 
@@ -84,25 +96,15 @@ export default function TicketScanner() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <ComponentCard title="Scan Ticket" desc="Camera scanning with lifetime validation">
+          <ComponentCard title="Scan Ticket" desc="Scan QR code or enter ticket code manually">
             <div className="space-y-6">
-              <div className="rounded-lg bg-blue-light-50 p-4 dark:bg-blue-light-500/10">
-                <div className="flex gap-3">
-                  <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-blue-light-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <div>
-                    <p className="text-sm font-medium text-blue-light-700 dark:text-blue-light-400">Current Scan Policy</p>
-                    <p className="mt-1 text-sm text-blue-light-600 dark:text-blue-light-400">
-                      Max {config.maxScanCount} scans per ticket • {config.scanWindowDays}-day window between scans
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               {showCamera && (
                 <div className="space-y-4">
-                  <BarcodeScanner onScan={handleScan} onError={(error) => console.error(error)} isActive={isScanning} />
+                  <BarcodeScanner 
+                    onScan={handleScan} 
+                    onError={(error) => console.error(error)} 
+                    isActive={isScanning} 
+                  />
                 </div>
               )}
 
@@ -121,28 +123,23 @@ export default function TicketScanner() {
                       )}
                     </div>
                     <div>
-                      <Badge color={scanResult.allowEntry ? "success" : "error"} size="lg" className="text-base">
+                      <Badge color={scanResult.allowEntry ? "success" : "error"} size="md" className="text-base">
                         {scanResult.allowEntry ? "ENTRY ALLOWED" : "ENTRY DENIED"}
                       </Badge>
-                      <div className="mt-4 space-y-2 text-left">
-                        <div className="flex justify-between">
+                      <div className="mt-4 space-y-2">
+                        <div className="flex justify-between text-left">
                           <span className="text-sm text-gray-600 dark:text-gray-400">Ticket Code:</span>
                           <span className="text-sm font-medium text-gray-900 dark:text-white/90">{scanResult.ticketCode}</span>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600 dark:text-gray-400">Scan Count:</span>
-                          <span className="text-sm font-medium text-gray-900 dark:text-white/90">{scanResult.scanCount + 1}/{config.maxScanCount}</span>
+                        <div className="flex justify-between text-left">
+                          <span className="text-sm text-gray-600 dark:text-gray-400">Customer:</span>
+                          <span className="text-sm font-medium text-gray-900 dark:text-white/90">{scanResult.customerName}</span>
                         </div>
-                        <div className="flex justify-between">
+                        <div className="flex justify-between text-left">
                           <span className="text-sm text-gray-600 dark:text-gray-400">Status:</span>
                           <span className="text-sm font-medium text-gray-900 dark:text-white/90">{scanResult.reason}</span>
                         </div>
                       </div>
-                      {scanResult.warningMessage && (
-                        <div className="mt-4 rounded-lg bg-warning-50 p-3 dark:bg-warning-500/10">
-                          <p className="text-sm text-warning-700 dark:text-warning-400">⚠️ {scanResult.warningMessage}</p>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -158,7 +155,7 @@ export default function TicketScanner() {
                     </div>
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Ready to Scan</h3>
-                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Click "Start Scanning" to activate camera</p>
+                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Click "Start Scanning" to activate camera or use manual entry below</p>
                     </div>
                   </div>
                 </div>
@@ -182,11 +179,31 @@ export default function TicketScanner() {
 
               <div className="border-t border-gray-200 pt-6 dark:border-gray-800">
                 <h4 className="mb-4 text-sm font-semibold text-gray-900 dark:text-white/90">Manual Ticket Entry</h4>
+                <div className="mb-3 rounded-lg bg-blue-light-50 p-3 dark:bg-blue-light-500/10">
+                  <p className="text-xs text-blue-light-700 dark:text-blue-light-400">
+                    💡 Test with: JGPNR-2024-001, JGPNR-2024-002, or JGPNR-2024-003
+                  </p>
+                </div>
                 <div className="flex gap-3">
                   <div className="flex-1">
-                    <Input type="text" placeholder="Enter ticket code" value={manualCode} onChange={(e) => setManualCode(e.target.value)} onKeyPress={(e) => e.key === "Enter" && handleManualEntry()} />
+                    <Input
+                      type="text"
+                      placeholder="Enter ticket code (e.g., JGPNR-2024-001)"
+                      value={manualCode}
+                      onChange={(e) => setManualCode(e.target.value.toUpperCase())}
+                      onKeyPress={(e) => {
+                        if (e.key === "Enter" && manualCode.trim()) {
+                          handleManualEntry();
+                        }
+                      }}
+                    />
                   </div>
-                  <Button variant="primary" size="md" onClick={handleManualEntry}>
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={handleManualEntry}
+                    disabled={!manualCode.trim()}
+                  >
                     Validate
                   </Button>
                 </div>

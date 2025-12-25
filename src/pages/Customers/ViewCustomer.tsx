@@ -8,7 +8,6 @@ import Badge from "../../components/ui/badge/Badge";
 import Button from "../../components/ui/button/Button";
 import ConfirmModal from "../../components/ui/ConfirmModal";
 import { useModal } from "../../hooks/useModal";
-import { navigateToSendMail } from "../../utils/emailService";
 import {
   Table,
   TableBody,
@@ -107,15 +106,10 @@ export default function ViewCustomer() {
   };
 
   const handleEmailCustomer = () => {
-    if (customer) {
-      const emailUrl = navigateToSendMail({
-        to: customer.email,
-        subject: `Message from JGPNR Paintball`,
-        body: `Dear ${customer.firstName} ${customer.lastName},\n\n`,
-      });
-      navigate(emailUrl);
-    }
-  };
+  if (customer) {
+    navigate(`/mail/send?to=${encodeURIComponent(customer.email)}&subject=${encodeURIComponent('Message from JGPNR Paintball')}&body=${encodeURIComponent(`Dear ${customer.firstName} ${customer.lastName},\n\n`)}`);
+  }
+};
 
   if (!customer) {
     return (

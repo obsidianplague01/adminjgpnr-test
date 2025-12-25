@@ -9,6 +9,8 @@ import Button from "../../components/ui/button/Button";
 import ConfirmModal from "../../components/ui/ConfirmModal";
 import { useModal } from "../../hooks/useModal";
 import { emailCustomer } from "../../utils/emailService";
+import QRCodeDisplay from "../../components/Tickets/QRCodeDisplay";
+import { Modal } from "../../components/ui/modal";
 
 interface Ticket {
   id: string;
@@ -36,7 +38,7 @@ export default function ViewTicket() {
   const { isOpen, openModal, closeModal } = useModal();
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
+  const [showQRModal, setShowQRModal] = useState(false);
   useEffect(() => {
     // Simulate fetching ticket data
     const fetchTicket = async () => {
@@ -81,14 +83,11 @@ export default function ViewTicket() {
   };
 
   const handleEmailCustomer = () => {
-    if (ticket) {
-      emailCustomer(
-        ticket.customer.email,
-        `${ticket.customer.firstName} ${ticket.customer.lastName}`,
-        "Regarding Your JGPNR Ticket"
-      );
-    }
-  };
+  if (ticket) {
+    navigate(`/mail/send?to=${encodeURIComponent(ticket.customer.email)}&subject=${encodeURIComponent(`Regarding Ticket ${ticket.ticketCode}`)}&body=${encodeURIComponent(`Dear ${ticket.customer.firstName} ${ticket.customer.lastName},\n\n`)}`);
+  }
+};
+
 
   if (!ticket) {
     return (
@@ -269,19 +268,14 @@ export default function ViewTicket() {
                 Email Customer
               </Button>
 
-              <Button variant="outline" size="md" className="w-full">
-                <svg
-                  className="mr-2 h-5 w-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"
-                  />
+              <Button 
+                variant="outline" 
+                size="md" 
+                className="w-full"
+                onClick={() => setShowQRModal(true)}
+              >
+                <svg className="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
                 </svg>
                 View QR Code
               </Button>
@@ -360,6 +354,40 @@ export default function ViewTicket() {
         type="danger"
         isLoading={isDeleting}
       />
+      <Modal isOpen={showQRModal} onClose={() => setShowQRModal(false)} className="max-w-md">
+  <div className="p-6">
+    <h3 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white/90">Ticket QR Code</h3>
+    <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900">
+      <div className="mb-2 flex justify-between text-sm">
+        <span className="text-gray-600 dark:text-gray-400">Ticket Code:</span>
+        <span className="font-medium text-gray-900 dark:text-white/90">{ticket.ticketCode}</span>
+      </div>
+      <div className="mb-2 flex justify-between text-sm">
+        <span className="text-gray-600 dark:text-gray-400">Customer:</span>
+        <span className="font-medium text-gray-900 dark:text-white/90">
+          {ticket.customer.firstName} {ticket.customer.lastName}
+        </span>
+      </div>
+      <div className="flex justify-between text-sm">
+        <span className="text-gray-600 dark:text-gray-400">Status:</span>
+        <Badge size="sm" color={ticket.status === "active" ? "success" : ticket.status === "scanned" ? "info" : "error"}>
+          {ticket.status}
+        </Badge>
+      </div>
+    </div>
+    <div className="flex justify-center">
+      <QRCodeDisplay ticketCode={ticket.ticketCode} size="lg" showDownload={true} />
+    </div>
+    <div className="mt-6 flex justify-end">
+      <button
+        onClick={() => setShowQRModal(false)}
+        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800"
+      >
+        Close
+      </button>
+    </div>
+  </div>
+</Modal>
     </>
   );
 }
