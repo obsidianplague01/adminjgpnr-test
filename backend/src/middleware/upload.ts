@@ -17,13 +17,26 @@ const storage = multer.diskStorage({
     if (file.fieldname === 'avatar') uploadPath = 'uploads/avatars';
     else if (file.fieldname === 'customerDoc') uploadPath = 'uploads/customer-documents';
     else if (file.fieldname === 'orderDoc') uploadPath = 'uploads/order-documents';
-    ensureDir(uploadPath);
-    cb(null, uploadPath);
+    
+    try {
+      ensureDir(uploadPath);
+      cb(null, uploadPath);
+    } catch (error) {
+      cb(new Error('Failed to create upload directory'), '');
+    }
   },
   filename: (_req, file, cb) => {
-    const uniqueSuffix = crypto.randomBytes(16).toString('hex');
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}-${uniqueSuffix}${ext}`);
+    try {
+      const uniqueSuffix = crypto.randomBytes(16).toString('hex');
+      const ext = path.extname(file.originalname);
+      
+      // Sanitize extension to prevent path traversal
+      const sanitizedExt = ext.replace(/[^a-zA-Z0-9.-]/g, '');
+      
+      cb(null, `${Date.now()}-${uniqueSuffix}${sanitizedExt}`);
+    } catch (error) {
+      cb(new Error('Failed to generate filename'), '');
+    }
   },
 });
 
@@ -44,15 +57,17 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
   if (allAllowed.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type ${file.mimetype} not allowed`));
+    cb(new Error('Invalid file type. Allowed types: images (JPEG, PNG, GIF, WebP) and documents (PDF, DOC, DOCX, XLS, XLSX)'));
   }
 };
+
 // Multer instance
 export const upload = multer({
   storage,
   fileFilter,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB max
+    files: 5,
   },
 });
 
@@ -64,16 +79,15 @@ export const uploadOrderDoc = upload.single('orderDoc');
 export const uploadMultiple = upload.array('files', 5);
 
 // Delete file helper
-export const deleteFile = (filepath: string) => {
+export const deleteFile = (filepath: string): boolean => {
   try {
     if (fs.existsSync(filepath)) {
       fs.unlinkSync(filepath);
+      return true;
     }
+    return false;
   } catch (error) {
     console.error('Error deleting file:', error);
+    return false;
   }
 };
-
-
-
-

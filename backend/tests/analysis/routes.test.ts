@@ -1,6 +1,6 @@
 // tests/analytics/routes.test.ts
 import request from 'supertest';
-import app from '../../app';
+import app from '../../src/app';
 
 describe('Analytics API', () => {
   it('GET /api/analytics/kpi returns 200 with valid token', async () => {

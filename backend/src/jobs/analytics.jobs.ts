@@ -247,7 +247,7 @@ async function generateReport(data: any) {
   logger.info('Generating analytics report', data);
 
   try {
-    const { reportType, email, period } = data;
+    const { email } = data;
 
     // Implementation would generate PDF/Excel report
     // and email it to the user

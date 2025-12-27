@@ -7,6 +7,30 @@ import prisma from '../../config/database';
 export class PaymentService {
   private readonly paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
   private readonly baseURL = 'https://api.paystack.co';
+  private readonly timeout = 30000; // 30 seconds
+
+  /**
+   * Fetch with timeout
+   */
+  private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('Payment request timed out');
+      }
+      throw error;
+    }
+  }
 
   /**
    * Initialize payment
@@ -26,7 +50,7 @@ export class PaymentService {
     }
 
     // Convert amount to kobo (Paystack requires amount in smallest currency unit)
-    const amountInKobo = Number(order.amount) * 100;
+    const amountInKobo = Math.round(Number(order.amount) * 100);
 
     const payload = {
       email: order.customer.email,
@@ -41,20 +65,32 @@ export class PaymentService {
     };
 
     try {
-      const response = await fetch(`${this.baseURL}/transaction/initialize`, {
-  method: 'POST',
-  headers: {
-    Authorization: `Bearer ${this.paystackSecretKey}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify(payload),
-});
+      const response = await this.fetchWithTimeout(
+        `${this.baseURL}/transaction/initialize`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.paystackSecretKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        }
+      );
 
-const data: any = await response.json();
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.error('Paystack API error:', {
+          status: response.status,
+          body: errorText,
+        });
+        throw new Error(`Paystack API returned ${response.status}`);
+      }
 
-if (!data.status) {
-  throw new Error(data.message || 'Payment initialization failed');
-}
+      const data: any = await response.json();
+
+      if (!data.status) {
+        throw new Error(data.message || 'Payment initialization failed');
+      }
 
       logger.info(`Payment initialized for order: ${order.orderNumber}`);
 
@@ -65,7 +101,7 @@ if (!data.status) {
       };
     } catch (error: any) {
       logger.error('Paystack initialization error:', error);
-      throw new AppError(500, 'Failed to initialize payment');
+      throw new AppError(500, `Failed to initialize payment: ${error.message}`);
     }
   }
 
@@ -74,8 +110,8 @@ if (!data.status) {
    */
   async verifyPayment(reference: string) {
     try {
-      const response = await fetch(
-        `${this.baseURL}/transaction/verify/${reference}`,
+      const response = await this.fetchWithTimeout(
+        `${this.baseURL}/transaction/verify/${encodeURIComponent(reference)}`,
         {
           method: 'GET',
           headers: {
@@ -83,6 +119,15 @@ if (!data.status) {
           },
         }
       );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.error('Paystack verification error:', {
+          status: response.status,
+          body: errorText,
+        });
+        throw new Error(`Paystack API returned ${response.status}`);
+      }
 
       const data = await response.json();
 
@@ -104,7 +149,7 @@ if (!data.status) {
       };
     } catch (error: any) {
       logger.error('Paystack verification error:', error);
-      throw new AppError(500, 'Failed to verify payment');
+      throw new AppError(500, `Failed to verify payment: ${error.message}`);
     }
   }
 
@@ -119,6 +164,7 @@ if (!data.status) {
       .digest('hex');
 
     if (hash !== signature) {
+      logger.warn('Invalid webhook signature received');
       throw new AppError(401, 'Invalid webhook signature');
     }
 
@@ -127,20 +173,25 @@ if (!data.status) {
 
     logger.info(`Webhook received: ${event}`);
 
-    switch (event) {
-      case 'charge.success':
-        await this.handleSuccessfulPayment(data);
-        break;
+    try {
+      switch (event) {
+        case 'charge.success':
+          await this.handleSuccessfulPayment(data);
+          break;
 
-      case 'charge.failed':
-        await this.handleFailedPayment(data);
-        break;
+        case 'charge.failed':
+          await this.handleFailedPayment(data);
+          break;
 
-      default:
-        logger.info(`Unhandled webhook event: ${event}`);
+        default:
+          logger.info(`Unhandled webhook event: ${event}`);
+      }
+
+      return { message: 'Webhook processed' };
+    } catch (error) {
+      logger.error('Webhook processing error:', error);
+      throw error;
     }
-
-    return { message: 'Webhook processed' };
   }
 
   /**
@@ -227,6 +278,3 @@ if (!data.status) {
     logger.warn(`Payment failed for order: ${order.orderNumber}`);
   }
 }
-
-
-

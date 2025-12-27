@@ -1,7 +1,8 @@
-// src/middleware/validate.ts
+// src/middleware/validate.ts - IMPROVED SANITIZATION
 import { Request, Response, NextFunction } from 'express';
 import { ZodSchema, ZodError } from 'zod';
 import { logger } from '../utils/logger';
+import DOMPurify from 'isomorphic-dompurify'; // Add this package
 
 export const validate = (schema: ZodSchema) => {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -18,7 +19,11 @@ export const validate = (schema: ZodSchema) => {
           field: err.path.join('.'),
           message: err.message,
         }));
-        logger.warn('Validation error:', { errors, body: req.body });
+        logger.warn('Validation error:', { 
+          errors, 
+          path: req.path,
+          method: req.method,
+        });
         res.status(400).json({ error: 'Validation failed', details: errors });
         return;
       }
@@ -27,17 +32,27 @@ export const validate = (schema: ZodSchema) => {
     }
   };
 };
-// Sanitize string inputs
+
+// Enhanced sanitization using DOMPurify
 export const sanitizeString = (str: string): string => {
-  return str
-    .trim()
-    .replace(/[<>]/g, '') // Remove angle brackets
-    .replace(/javascript:/gi, '') // Remove javascript: protocol
-    .replace(/on\w+=/gi, ''); // Remove inline event handlers
+  if (typeof str !== 'string') return str;
+  
+  // Use DOMPurify for HTML sanitization
+  const cleaned = DOMPurify.sanitize(str, {
+    ALLOWED_TAGS: [], // Strip all HTML tags
+    ALLOWED_ATTR: [], // Strip all attributes
+    KEEP_CONTENT: true, // Keep text content
+  });
+  
+  return cleaned.trim();
 };
 
 // Sanitize object recursively
 export const sanitizeObject = (obj: any): any => {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+  
   if (typeof obj === 'string') {
     return sanitizeString(obj);
   }
@@ -49,7 +64,11 @@ export const sanitizeObject = (obj: any): any => {
   if (obj && typeof obj === 'object') {
     const sanitized: any = {};
     for (const [key, value] of Object.entries(obj)) {
-      sanitized[key] = sanitizeObject(value);
+      // Also sanitize keys to prevent prototype pollution
+      const sanitizedKey = sanitizeString(key);
+      if (!['__proto__', 'constructor', 'prototype'].includes(sanitizedKey)) {
+        sanitized[sanitizedKey] = sanitizeObject(value);
+      }
     }
     return sanitized;
   }
@@ -57,8 +76,14 @@ export const sanitizeObject = (obj: any): any => {
   return obj;
 };
 
+// Apply sanitization middleware
 export const sanitizeInput = (req: Request, _res: Response, next: NextFunction) => {
-  req.body = sanitizeObject(req.body);
-  req.query = sanitizeObject(req.query);
+  if (req.body && Object.keys(req.body).length > 0) {
+    req.body = sanitizeObject(req.body);
+  }
+  if (req.query && Object.keys(req.query).length > 0) {
+    req.query = sanitizeObject(req.query);
+  }
+  // Don't sanitize params as they're usually IDs validated by schemas
   next();
 };

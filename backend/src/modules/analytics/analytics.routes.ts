@@ -1,4 +1,4 @@
-// backend/src/modules/analytics/analytics.routes.ts (ENHANCED)
+// backend/src/modules/analytics/analytics.routes.ts 
 import { Router } from 'express';
 import * as analyticsController from './analytics.controller';
 import { authenticateJWT, requireAdmin } from '../../middleware/auth';
@@ -6,7 +6,8 @@ import { validate } from '../../middleware/validate';
 import { cache } from '../../middleware/cache';
 import { exportLimiter } from '../../middleware/rateLimit';
 import { analyticsQuerySchema } from './analytics.schema';
-
+import * as forecastingController from './forecasting.controller';
+import * as excelExportController from './excel-export.controller';
 const router = Router();
 router.use(authenticateJWT, requireAdmin);
 
@@ -164,5 +165,29 @@ router.post(
   exportLimiter,
   analyticsController.exportCustomReport
 );
+router.get(
+  '/forecast/revenue',
+  validate(analyticsQuerySchema),
+  cache({ ttl: 3600 }),
+  forecastingController.forecastRevenue
+);
 
+router.get(
+  '/forecast/tickets',
+  validate(analyticsQuerySchema),
+  cache({ ttl: 3600 }),
+  forecastingController.forecastTicketSales
+);
+
+router.get(
+  '/forecast/customers',
+  validate(analyticsQuerySchema),
+  cache({ ttl: 3600 }),
+  forecastingController.forecastCustomerGrowth
+);
+router.post(
+  '/export/excel',
+  exportLimiter,
+  excelExportController.exportAnalyticsExcel
+);
 export default router;

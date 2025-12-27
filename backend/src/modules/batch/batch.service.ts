@@ -13,7 +13,6 @@ export class BatchService {
   /**
    * Bulk create tickets
    */
- 
   async bulkCreateTickets(data: {
     orderId: string;
     gameSession: string;
@@ -39,45 +38,58 @@ export class BatchService {
       throw new AppError(500, 'Failed to load ticket settings');
     }
 
-    const tickets = [];
+    try {
+      // Create all tickets in a single transaction
+      const tickets = await prisma.$transaction(async (tx) => {
+        const ticketsToCreate = [];
+        
+        for (let i = 0; i < data.quantity; i++) {
+          ticketsToCreate.push({
+            ticketCode: generateTicketCode(),
+            orderId: data.orderId,
+            gameSession: data.gameSession,
+            validUntil: addDays(new Date(), data.validityDays || settings.validityDays),
+            maxScans: settings.maxScanCount,
+            scanWindow: settings.scanWindowDays,
+            status: TicketStatus.ACTIVE,
+          });
+        }
 
-    // Create tickets in batches of 50
-    const batchSize = 50;
-    const batches = Math.ceil(data.quantity / batchSize);
-
-    for (let i = 0; i < batches; i++) {
-      const batchCount = Math.min(batchSize, data.quantity - i * batchSize);
-      const batchTickets = [];
-
-      for (let j = 0; j < batchCount; j++) {
-        batchTickets.push({
-          ticketCode: generateTicketCode(),
-          orderId: data.orderId,
-          gameSession: data.gameSession,
-          validUntil: addDays(new Date(), data.validityDays || settings.validityDays),
-          maxScans: settings.maxScanCount,
-          scanWindow: settings.scanWindowDays,
-          status: TicketStatus.ACTIVE,
+        // Use createMany for better performance
+        await tx.ticket.createMany({
+          data: ticketsToCreate,
         });
-      }
 
-      tickets.push(...batchTickets);
+        // Fetch created tickets to return
+        const createdTickets = await tx.ticket.findMany({
+          where: {
+            orderId: data.orderId,
+            ticketCode: {
+              in: ticketsToCreate.map(t => t.ticketCode)
+            }
+          },
+          take: 10, // Return first 10 for preview
+        });
 
-      logger.info(`Created batch ${i + 1}/${batches} (${batchCount} tickets)`);
+        return createdTickets;
+      });
+
+      emitToAdmins('batch:complete', {
+        type: 'bulk_create_tickets',
+        count: data.quantity,
+        orderId: data.orderId,
+      });
+
+      logger.info(`Bulk created ${data.quantity} tickets for order ${data.orderId}`);
+
+      return {
+        created: data.quantity,
+        tickets: tickets, // Return first 10 for preview
+      };
+    } catch (error) {
+      logger.error('Bulk ticket creation failed:', error);
+      throw new AppError(500, 'Failed to create tickets in bulk');
     }
-
-    emitToAdmins('batch:complete', {
-      type: 'bulk_create_tickets',
-      count: tickets.length,
-      orderId: data.orderId,
-    });
-
-    logger.info(`Bulk created ${tickets.length} tickets for order ${data.orderId}`);
-
-    return {
-      created: tickets.length,
-      tickets: tickets.slice(0, 10), // Return first 10 for preview
-    };
   }
 
   /**
@@ -257,5 +269,4 @@ export class BatchService {
 
     return status;
   }
-  
 }

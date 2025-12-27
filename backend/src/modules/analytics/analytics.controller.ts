@@ -244,7 +244,7 @@ export const getCustomerSegments = asyncHandler(async (req: Request, res: Respon
 
 // ===== CAMPAIGN ENDPOINTS =====
 
-export const getCampaignPerformance = asyncHandler(async (req: Request, res: Response) => {
+export const getCampaignPerformance = asyncHandler(async (_req: Request, res: Response) => {
   const cacheKey = 'analytics:campaigns:performance';
   
   const data = await cacheService.getOrSet(
@@ -379,7 +379,7 @@ export const getForecast = asyncHandler(async (req: Request, res: Response) => {
 
 // ===== EXISTING ENDPOINTS (Backward Compatibility) =====
 
-export const getDashboardOverview = asyncHandler(async (req: Request, res: Response) => {
+export const getDashboardOverview = asyncHandler(async (_req: Request, res: Response) => {
   const overview = await analyticsService.getDashboardOverview();
   res.json(overview);
 });
@@ -416,7 +416,7 @@ export const getScanStats = asyncHandler(async (req: Request, res: Response) => 
   res.json(stats);
 });
 
-export const getCampaignStats = asyncHandler(async (req: Request, res: Response) => {
+export const getCampaignStats = asyncHandler(async (_req: Request, res: Response) => {
   const stats = await analyticsService.getCampaignStats();
   res.json(stats);
 });
@@ -468,7 +468,7 @@ export const invalidateCache = asyncHandler(async (req: Request, res: Response) 
   res.json({ message: 'Cache invalidated successfully' });
 });
 
-export const getCacheStats = asyncHandler(async (req: Request, res: Response) => {
+export const getCacheStats = asyncHandler(async (_req: Request, res: Response) => {
   const stats = await cacheService.getStats();
   res.json(stats);
 });

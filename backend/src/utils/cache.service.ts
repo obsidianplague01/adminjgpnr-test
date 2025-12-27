@@ -1,18 +1,86 @@
-// backend/src/utils/cache.service.ts
+// src/utils/cache.service.ts - PRODUCTION-READY VERSION
 import redis from '../config/cache';
 import prisma from '../config/database';
 import { logger } from './logger';
 
 export class CacheService {
   private readonly DEFAULT_TTL = 300; // 5 minutes
+  private isRedisHealthy = false;
+
+  constructor() {
+    this.initializeHealthCheck();
+  }
+
+  /**
+   * Initialize health monitoring
+   */
+  private initializeHealthCheck() {
+    // Check Redis health on startup
+    this.checkRedisHealth();
+
+    // Periodic health check every 30 seconds
+    setInterval(() => {
+      this.checkRedisHealth();
+    }, 30000);
+  }
+
+  /**
+   * Check Redis connection health
+   */
+  private async checkRedisHealth() {
+    try {
+      await redis.ping();
+      if (!this.isRedisHealthy) {
+        logger.info('Redis connection restored');
+      }
+      this.isRedisHealthy = true;
+    } catch (error) {
+      if (this.isRedisHealthy) {
+        logger.error('Redis connection lost');
+      }
+      this.isRedisHealthy = false;
+    }
+  }
+
+  /**
+   * Check if cache service is healthy
+   */
+  isHealthy(): boolean {
+    return this.isRedisHealthy;
+  }
+
+  /**
+   * Safe Redis operation wrapper
+   */
+  private async safeRedisOperation<T>(
+    operation: () => Promise<T>,
+    fallback: T
+  ): Promise<T> {
+    if (!this.isRedisHealthy) {
+      logger.warn('Redis unavailable, skipping cache operation');
+      return fallback;
+    }
+
+    try {
+      return await operation();
+    } catch (error) {
+      logger.error('Redis operation failed:', error);
+      this.isRedisHealthy = false;
+      return fallback;
+    }
+  }
 
   /**
    * Get cached value (with database fallback for analytics)
    */
   async get<T>(key: string): Promise<T | null> {
     try {
-      // Try Redis first
-      const data = await redis.get(key);
+      // Try Redis first (with safety wrapper)
+      const data = await this.safeRedisOperation(
+        () => redis.get(key),
+        null
+      );
+
       if (data) {
         logger.debug(`Cache HIT (Redis): ${key}`);
         return JSON.parse(data);
@@ -29,8 +97,15 @@ export class CacheService {
 
         if (dbCache) {
           logger.debug(`Cache HIT (DB): ${key}`);
-          // Warm up Redis
-          await redis.setex(key, this.DEFAULT_TTL, JSON.stringify(dbCache.data));
+          // Warm up Redis (non-blocking)
+          if (this.isRedisHealthy) {
+            this.safeRedisOperation(
+              () => redis.setex(key, this.DEFAULT_TTL, JSON.stringify(dbCache.data)),
+              undefined
+            ).catch(() => {
+              // Ignore warmup failures
+            });
+          }
           return dbCache.data as T;
         }
       }
@@ -38,7 +113,7 @@ export class CacheService {
       logger.debug(`Cache MISS: ${key}`);
       return null;
     } catch (error) {
-      logger.error('Cache get error:', error);
+      logger.error(`Cache get error for key ${key}:`, error);
       return null;
     }
   }
@@ -46,81 +121,115 @@ export class CacheService {
   /**
    * Set cached value (dual write to Redis and DB for analytics)
    */
-  async set(key: string, value: any, ttl?: number): Promise<void> {
+  async set(key: string, value: any, ttl?: number): Promise<boolean> {
     try {
       const serialized = JSON.stringify(value);
       const effectiveTTL = ttl || this.DEFAULT_TTL;
 
-      // Always write to Redis
-      await redis.setex(key, effectiveTTL, serialized);
+      // Try to write to Redis
+      const redisSuccess = await this.safeRedisOperation(
+        () => redis.setex(key, effectiveTTL, serialized).then(() => true),
+        false
+      );
 
       // Write to DB for analytics (persistent cache)
       if (key.startsWith('analytics:')) {
         const expiresAt = new Date(Date.now() + effectiveTTL * 1000);
         
-        await prisma.analyticsCache.upsert({
-          where: { cacheKey: key },
-          update: { 
-            data: value,
-            expiresAt,
-          },
-          create: {
-            cacheKey: key,
-            data: value,
-            expiresAt,
-          },
-        });
+        try {
+          await prisma.analyticsCache.upsert({
+            where: { cacheKey: key },
+            update: { 
+              data: value,
+              expiresAt,
+            },
+            create: {
+              cacheKey: key,
+              data: value,
+              expiresAt,
+            },
+          });
+        } catch (dbError) {
+          logger.error(`DB cache write failed for ${key}:`, dbError);
+          // Continue even if DB write fails
+        }
       }
 
-      logger.debug(`Cache SET: ${key} (TTL: ${effectiveTTL}s)`);
+      logger.debug(`Cache SET: ${key} (TTL: ${effectiveTTL}s, Redis: ${redisSuccess})`);
+      return redisSuccess;
     } catch (error) {
-      logger.error('Cache set error:', error);
-      throw error;
+      logger.error(`Cache set error for key ${key}:`, error);
+      return false;
     }
   }
 
   /**
    * Delete cached value
    */
-  async delete(key: string): Promise<void> {
+  async delete(key: string): Promise<boolean> {
     try {
-      await redis.del(key);
+      const redisSuccess = await this.safeRedisOperation(
+        () => redis.del(key).then(() => true),
+        false
+      );
 
       if (key.startsWith('analytics:')) {
-        await prisma.analyticsCache.delete({
-          where: { cacheKey: key },
-        }).catch(() => {
-          // Ignore if not found
-        });
+        try {
+          await prisma.analyticsCache.delete({
+            where: { cacheKey: key },
+          });
+        } catch {
+          // Ignore if not found in DB
+        }
       }
 
-      logger.debug(`Cache DELETE: ${key}`);
+      logger.debug(`Cache DELETE: ${key} (Redis: ${redisSuccess})`);
+      return redisSuccess;
     } catch (error) {
-      logger.error('Cache delete error:', error);
+      logger.error(`Cache delete error for key ${key}:`, error);
+      return false;
     }
   }
 
   /**
    * Delete by pattern
    */
-  async deletePattern(pattern: string): Promise<void> {
+  async deletePattern(pattern: string): Promise<number> {
     try {
-      const keys = await redis.keys(pattern);
-      if (keys.length > 0) {
-        await redis.del(...keys);
-        logger.info(`Invalidated ${keys.length} cache keys matching: ${pattern}`);
+      let deletedCount = 0;
+
+      // Delete from Redis
+      if (this.isRedisHealthy) {
+        try {
+          const keys = await redis.keys(pattern);
+          if (keys.length > 0) {
+            await redis.del(...keys);
+            deletedCount = keys.length;
+            logger.info(`Invalidated ${keys.length} Redis keys matching: ${pattern}`);
+          }
+        } catch (error) {
+          logger.error('Redis pattern delete error:', error);
+        }
       }
 
       // Clean DB cache
       if (pattern.startsWith('analytics:')) {
-        const likePattern = pattern.replace('*', '%');
-        await prisma.$executeRawUnsafe(
-          `DELETE FROM analytics_cache WHERE cache_key LIKE $1`,
-          likePattern
-        );
+        try {
+          const likePattern = pattern.replace('*', '%');
+          const result = await prisma.$executeRawUnsafe(
+            `DELETE FROM "AnalyticsCache" WHERE "cacheKey" LIKE $1`,
+            likePattern
+          );
+          logger.info(`Deleted ${result} DB cache entries matching: ${pattern}`);
+        } catch (error) {
+          logger.error('DB pattern delete error:', error);
+        }
       }
+
+      return deletedCount;
     } catch (error) {
       logger.error('Cache pattern delete error:', error);
+      return 0;
     }
   }
 
@@ -128,7 +237,10 @@ export class CacheService {
    * Check if key exists
    */
   async exists(key: string): Promise<boolean> {
-    return (await redis.exists(key)) === 1;
+    return await this.safeRedisOperation(
+      () => redis.exists(key).then(result => result === 1),
+      false
+    );
   }
 
   /**
@@ -153,27 +265,48 @@ export class CacheService {
    * Increment counter
    */
   async increment(key: string, amount = 1): Promise<number> {
-    return await redis.incrby(key, amount);
+    return await this.safeRedisOperation(
+      () => redis.incrby(key, amount),
+      0
+    );
   }
 
   /**
    * Set expiration
    */
-  async expire(key: string, seconds: number): Promise<void> {
-    await redis.expire(key, seconds);
+  async expire(key: string, seconds: number): Promise<boolean> {
+    return await this.safeRedisOperation(
+      () => redis.expire(key, seconds).then(() => true),
+      false
+    );
+  }
+
+  /**
+   * Get remaining TTL
+   */
+  async ttl(key: string): Promise<number> {
+    return await this.safeRedisOperation(
+      () => redis.ttl(key),
+      -1
+    );
   }
 
   /**
    * Get cache statistics
    */
   async getStats(): Promise<{
+    redisHealthy: boolean;
     redisKeys: number;
     dbCacheRecords: number;
     expiredRecords: number;
   }> {
     try {
-      const [redisKeys, dbCache, expired] = await Promise.all([
-        redis.dbsize(),
+      const redisKeys = await this.safeRedisOperation(
+        () => redis.dbsize(),
+        0
+      );
+
+      const [dbCache, expired] = await Promise.all([
         prisma.analyticsCache.count(),
         prisma.analyticsCache.count({
           where: { expiresAt: { lt: new Date() } },
@@ -181,13 +314,19 @@ export class CacheService {
       ]);
 
       return {
+        redisHealthy: this.isRedisHealthy,
         redisKeys,
         dbCacheRecords: dbCache,
         expiredRecords: expired,
       };
     } catch (error) {
       logger.error('Cache stats error:', error);
-      return { redisKeys: 0, dbCacheRecords: 0, expiredRecords: 0 };
+      return { 
+        redisHealthy: this.isRedisHealthy,
+        redisKeys: 0, 
+        dbCacheRecords: 0, 
+        expiredRecords: 0 
+      };
     }
   }
 
@@ -229,6 +368,73 @@ export class CacheService {
   async invalidateAllAnalytics(): Promise<void> {
     await this.deletePattern('analytics:*');
     logger.info('All analytics cache invalidated');
+  }
+
+  /**
+   * Flush all cache (use with caution)
+   */
+  async flushAll(): Promise<boolean> {
+    try {
+      const redisSuccess = await this.safeRedisOperation(
+        () => redis.flushall().then(() => true),
+        false
+      );
+
+      // Also clear DB cache
+      await prisma.analyticsCache.deleteMany({});
+      
+      logger.warn('All cache flushed');
+      return redisSuccess;
+    } catch (error) {
+      logger.error('Cache flush error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get multiple keys at once
+   */
+  async mget<T>(keys: string[]): Promise<Array<T | null>> {
+    if (keys.length === 0) return [];
+
+    const results = await this.safeRedisOperation(
+      () => redis.mget(...keys),
+      keys.map(() => null)
+    );
+
+    return results.map(data => {
+      if (!data) return null;
+      try {
+        return JSON.parse(data) as T;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Set multiple keys at once
+   */
+  async mset(entries: Array<{ key: string; value: any; ttl?: number }>): Promise<boolean> {
+    try {
+      const pipeline = redis.pipeline();
+
+      for (const { key, value, ttl } of entries) {
+        const serialized = JSON.stringify(value);
+        const effectiveTTL = ttl || this.DEFAULT_TTL;
+        pipeline.setex(key, effectiveTTL, serialized);
+      }
+
+      await this.safeRedisOperation(
+        () => pipeline.exec().then(() => true),
+        false
+      );
+
+      return true;
+    } catch (error) {
+      logger.error('Cache mset error:', error);
+      return false;
+    }
   }
 }
 

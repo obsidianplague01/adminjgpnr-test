@@ -1,62 +1,102 @@
+// src/middleware/cache.ts
 import { Request, Response, NextFunction } from 'express';
-import redis from '../config/cache';
+import { cacheService } from '../utils/cache.service';
 import { logger } from '../utils/logger';
 
-export interface CacheOptions {
-  ttl?: number; // Time to live in seconds
-  prefix?: string;
-  keyGenerator?: (req: Request) => string;
-}
+const CACHE_TTL = 300; // 5 minutes default
+const MAX_KEY_LENGTH = 250;
 
 /**
- * Cache middleware for GET requests
+ * Validate cache key
  */
-export const cache = (options: CacheOptions = {}) => {
-  const {
-    ttl = 300, // 5 minutes default
-    prefix = 'api',
-    keyGenerator,
-  } = options;
+const validateCacheKey = (key: string): boolean => {
+  if (!key || typeof key !== 'string') {
+    return false;
+  }
+  
+  if (key.length > MAX_KEY_LENGTH) {
+    return false;
+  }
+  
+  // Ensure key doesn't contain invalid characters
+  const invalidChars = /[\s\n\r\t]/;
+  if (invalidChars.test(key)) {
+    return false;
+  }
+  
+  return true;
+};
 
+/**
+ * Generate cache key from request
+ */
+const generateCacheKey = (req: Request): string => {
+  const baseKey = `api:${req.path}`;
+  
+  // Include query parameters in key
+  const queryKeys = Object.keys(req.query).sort();
+  if (queryKeys.length > 0) {
+    const queryString = queryKeys
+      .map(key => `${key}=${req.query[key]}`)
+      .join('&');
+    return `${baseKey}?${queryString}`;
+  }
+  
+  return baseKey;
+};
+
+/**
+ * Cache middleware
+ */
+export const cache = (ttl: number = CACHE_TTL) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // Only cache GET requests
     if (req.method !== 'GET') {
       return next();
     }
 
-    try {
-      // Generate cache key
-      const cacheKey = keyGenerator
-        ? keyGenerator(req)
-        : `${prefix}:${req.path}:${JSON.stringify(req.query)}:${req.user?.userId || 'anonymous'}`;
+    const cacheKey = generateCacheKey(req);
 
-      // Try to get from cache
-      const cachedData = await redis.get(cacheKey);
+    if (!validateCacheKey(cacheKey)) {
+      logger.warn(`Invalid cache key generated: ${cacheKey.substring(0, 100)}`);
+      return next();
+    }
+
+    try {
+      const cachedData = await cacheService.get(cacheKey);
 
       if (cachedData) {
-        logger.debug(`Cache HIT: ${cacheKey}`);
-        res.setHeader('X-Cache', 'HIT');
-        return res.json(JSON.parse(cachedData));
+        logger.debug(`Cache hit: ${cacheKey}`);
+        
+        return res.json({
+          ...cachedData,
+          _cached: true,
+          _cachedAt: new Date().toISOString(),
+        });
       }
 
-      logger.debug(`Cache MISS: ${cacheKey}`);
-      res.setHeader('X-Cache', 'MISS');
+      logger.debug(`Cache miss: ${cacheKey}`);
 
-      // Override res.json to cache the response
+      // Store original json method
       const originalJson = res.json.bind(res);
+
+      // Override json method to cache response
       res.json = function (data: any) {
-        // Cache the response
-        redis.setex(cacheKey, ttl, JSON.stringify(data)).catch((err) => {
-          logger.error('Cache set error:', err);
-        });
+        // Only cache successful responses
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          cacheService.set(cacheKey, data, ttl).catch((error) => {
+            logger.error(`Failed to cache response for ${cacheKey}:`, error);
+          });
+        }
 
         return originalJson(data);
       };
 
       next();
     } catch (error) {
-      logger.error('Cache middleware error:', error);
-      next(); // Continue without cache on error
+      logger.error(`Cache middleware error for ${cacheKey}:`, error);
+      // Continue without caching on error
+      next();
     }
   };
 };
@@ -64,26 +104,46 @@ export const cache = (options: CacheOptions = {}) => {
 /**
  * Invalidate cache by pattern
  */
-export const invalidateCache = async (pattern: string) => {
+export const invalidateCache = async (pattern: string): Promise<void> => {
+  if (!validateCacheKey(pattern)) {
+    logger.warn(`Invalid cache pattern: ${pattern}`);
+    return;
+  }
+
   try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) {
-      await redis.del(...keys);
-      logger.info(`Invalidated ${keys.length} cache keys matching: ${pattern}`);
-    }
+    await cacheService.del(pattern);
+    logger.debug(`Cache invalidated: ${pattern}`);
   } catch (error) {
-    logger.error('Cache invalidation error:', error);
+    logger.error(`Failed to invalidate cache ${pattern}:`, error);
+    throw error;
   }
 };
 
 /**
- * Invalidate all cache
+ * Clear all cache
  */
-export const invalidateAllCache = async () => {
+export const clearAllCache = async (): Promise<void> => {
   try {
-    await redis.flushdb();
-    logger.info('All cache invalidated');
+    await cacheService.flush();
+    logger.info('All cache cleared');
   } catch (error) {
-    logger.error('Cache flush error:', error);
+    logger.error('Failed to clear all cache:', error);
+    throw error;
+  }
+};
+
+/**
+ * Cache warming middleware - preload common queries
+ */
+export const warmCache = async () => {
+  try {
+    logger.info('Starting cache warming...');
+    
+    // Add your cache warming logic here
+    // Example: Preload frequently accessed data
+    
+    logger.info('Cache warming completed');
+  } catch (error) {
+    logger.error('Cache warming failed:', error);
   }
 };

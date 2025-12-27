@@ -1,6 +1,7 @@
 // src/modules/auth/twoFactor.service.ts
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
+import bcrypt from 'bcrypt';
 import prisma from '../../config/database';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
@@ -168,7 +169,6 @@ export class TwoFactorService {
     }
 
     // Verify password
-    const bcrypt = require('bcrypt');
     const isValidPassword = await bcrypt.compare(password, user.password);
 
     if (!isValidPassword) {
@@ -215,7 +215,6 @@ export class TwoFactorService {
     }
 
     // Verify password
-    const bcrypt = require('bcrypt');
     const isValidPassword = await bcrypt.compare(password, user.password);
 
     if (!isValidPassword) {
@@ -234,7 +233,3 @@ export class TwoFactorService {
     return { backupCodes };
   }
 }
-
-
-
-

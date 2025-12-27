@@ -2,103 +2,40 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../config/database';
 import { AppError } from '../../middleware/errorHandler';
-import fs from 'fs';
+import { logger } from '../../utils/logger';
+import { promises as fs } from 'fs';
+import path from 'path';
 import {
   CreateCustomerInput,
   UpdateCustomerInput,
   ListCustomersInput,
 } from './customer.schema';
-import { logger } from '../../utils/logger';
-import { deleteFile } from '../../middleware/upload';
 
 export class CustomerService {
   /**
    * Create new customer
    */
   async createCustomer(data: CreateCustomerInput) {
+    // Check if customer already exists
+    const existing = await prisma.customer.findUnique({
+      where: { email: data.email },
+    });
+
+    if (existing) {
+      throw new AppError(400, 'Customer with this email already exists');
+    }
+
     const customer = await prisma.customer.create({
-      data,
+      data: {
+        ...data,
+        status: 'active',
+      },
     });
 
     logger.info(`Customer created: ${customer.email}`);
     return customer;
   }
- async uploadDocument(customerId: string, file: Express.Multer.File) {
-  const customer = await prisma.customer.findUnique({
-    where: { id: customerId },
-  });
 
-  if (!customer) {
-    deleteFile(file.path);
-    throw new AppError(404, 'Customer not found');
-  }
-
-  if (customer.documentPath) {
-    deleteFile(customer.documentPath);
-  }
-
-  await prisma.customer.update({
-    where: { id: customerId },
-    data: {
-      documentPath: file.path,
-      documentName: file.originalname,
-    },
-  });
-
-  logger.info(`Document uploaded for customer: ${customerId}`);
-
-  return {
-    message: 'Document uploaded successfully',
-    filename: file.filename,
-    path: file.path,
-  };
-}
-
-  async deleteDocument(customerId: string) {
-    const customer = await prisma.customer.findUnique({
-      where: { id: customerId },
-    });
-
-    if (!customer) {
-      throw new AppError(404, 'Customer not found');
-    }
-
-    if (customer.documentPath) {
-      deleteFile(customer.documentPath);
-    }
-
-    await prisma.customer.update({
-      where: { id: customerId },
-      data: {
-        documentPath: null,
-        documentName: null,
-      },
-    });
-
-    logger.info(`Document deleted for customer: ${customerId}`);
-
-    return { message: 'Document deleted successfully' };
-  }
-
-  async getDocument(customerId: string) {
-    const customer = await prisma.customer.findUnique({
-      where: { id: customerId },
-      select: { documentPath: true, documentName: true },
-    });
-
-    if (!customer || !customer.documentPath) {
-      throw new AppError(404, 'Document not found');
-    }
-
-    if (!fs.existsSync(customer.documentPath)) {
-      throw new AppError(404, 'Document file not found');
-    }
-
-    return {
-      path: customer.documentPath,
-      name: customer.documentName,
-    };
-  }
   /**
    * List customers with filters
    */
@@ -122,6 +59,10 @@ export class CustomerService {
       ];
     }
 
+    if (filters.location) {
+      where.location = { contains: filters.location, mode: 'insensitive' };
+    }
+
     const [customers, total] = await Promise.all([
       prisma.customer.findMany({
         where,
@@ -130,7 +71,9 @@ export class CustomerService {
         orderBy: { createdAt: 'desc' },
         include: {
           _count: {
-            select: { orders: true },
+            select: {
+              orders: true,
+            },
           },
         },
       }),
@@ -168,6 +111,32 @@ export class CustomerService {
             },
           },
         },
+        _count: {
+          select: {
+            orders: true,
+          },
+        },
+      },
+    });
+
+    if (!customer) {
+      throw new AppError(404, 'Customer not found');
+    }
+
+    return customer;
+  }
+
+  /**
+   * Get customer by email
+   */
+  async getCustomerByEmail(email: string) {
+    const customer = await prisma.customer.findUnique({
+      where: { email },
+      include: {
+        orders: {
+          orderBy: { purchaseDate: 'desc' },
+          take: 5,
+        },
       },
     });
 
@@ -182,6 +151,26 @@ export class CustomerService {
    * Update customer
    */
   async updateCustomer(customerId: string, data: UpdateCustomerInput) {
+    // Check if customer exists
+    const existing = await prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!existing) {
+      throw new AppError(404, 'Customer not found');
+    }
+
+    // If email is being changed, check uniqueness
+    if (data.email && data.email !== existing.email) {
+      const emailExists = await prisma.customer.findUnique({
+        where: { email: data.email },
+      });
+
+      if (emailExists) {
+        throw new AppError(400, 'Email already in use by another customer');
+      }
+    }
+
     const customer = await prisma.customer.update({
       where: { id: customerId },
       data,
@@ -192,87 +181,181 @@ export class CustomerService {
   }
 
   /**
-   * Delete customer (soft delete)
+   * Delete customer
    */
   async deleteCustomer(customerId: string) {
-    // Check if customer has orders
-    const orderCount = await prisma.order.count({
-      where: { customerId },
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      include: {
+        orders: true,
+      },
     });
 
-    if (orderCount > 0) {
-      // Soft delete - mark as inactive
-      await prisma.customer.update({
-        where: { id: customerId },
-        data: { status: 'inactive' },
-      });
-
-      logger.info(`Customer soft deleted: ${customerId}`);
-      return { message: 'Customer deactivated (has existing orders)' };
+    if (!customer) {
+      throw new AppError(404, 'Customer not found');
     }
 
-    // Hard delete if no orders
+    // Check if customer has orders
+    if (customer.orders.length > 0) {
+      throw new AppError(
+        400,
+        'Cannot delete customer with existing orders. Consider deactivating instead.'
+      );
+    }
+
+    // Delete associated files if any
+    if (customer.avatar) {
+      try {
+        const avatarPath = path.join(process.cwd(), customer.avatar);
+        await fs.unlink(avatarPath);
+      } catch (error) {
+        logger.warn(`Failed to delete avatar for customer ${customerId}:`, error);
+        // Continue with customer deletion even if file deletion fails
+      }
+    }
+
     await prisma.customer.delete({
       where: { id: customerId },
     });
 
-    logger.info(`Customer deleted: ${customerId}`);
+    logger.info(`Customer deleted: ${customer.email}`);
     return { message: 'Customer deleted successfully' };
   }
 
   /**
-   * Get customer purchase history
+   * Deactivate customer
    */
-  async getCustomerOrders(customerId: string, page = 1, limit = 20) {
-    const skip = (page - 1) * limit;
+  async deactivateCustomer(customerId: string) {
+    const customer = await prisma.customer.update({
+      where: { id: customerId },
+      data: { status: 'inactive' },
+    });
 
-    const [orders, total] = await Promise.all([
-      prisma.order.findMany({
-        where: { customerId },
-        skip,
-        take: limit,
-        orderBy: { purchaseDate: 'desc' },
-        include: {
-          tickets: {
-            select: {
-              id: true,
-              ticketCode: true,
-              status: true,
-              scanCount: true,
-            },
-          },
-        },
-      }),
-      prisma.order.count({ where: { customerId } }),
-    ]);
+    logger.info(`Customer deactivated: ${customer.email}`);
+    return customer;
+  }
 
-    return {
-      orders,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    };
+  /**
+   * Reactivate customer
+   */
+  async reactivateCustomer(customerId: string) {
+    const customer = await prisma.customer.update({
+      where: { id: customerId },
+      data: { status: 'active' },
+    });
+
+    logger.info(`Customer reactivated: ${customer.email}`);
+    return customer;
   }
 
   /**
    * Get customer statistics
    */
   async getCustomerStats() {
-    const [total, active, inactive, withOrders] = await Promise.all([
+    const [total, active, inactive, newThisMonth] = await Promise.all([
       prisma.customer.count(),
       prisma.customer.count({ where: { status: 'active' } }),
       prisma.customer.count({ where: { status: 'inactive' } }),
-      prisma.customer.count({ where: { totalOrders: { gt: 0 } } }),
+      prisma.customer.count({
+        where: {
+          createdAt: {
+            gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+          },
+        },
+      }),
     ]);
 
     return {
       total,
       active,
       inactive,
-      withOrders,
+      newThisMonth,
     };
+  }
+
+  /**
+   * Get top customers by spending
+   */
+  async getTopCustomers(limit = 10) {
+    const customers = await prisma.customer.findMany({
+      where: {
+        status: 'active',
+        totalOrders: { gt: 0 },
+      },
+      orderBy: { totalSpent: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        totalOrders: true,
+        totalSpent: true,
+        lastPurchase: true,
+      },
+    });
+
+    return customers;
+  }
+
+  /**
+   * Search customers
+   */
+  async searchCustomers(query: string, limit = 10) {
+    const customers = await prisma.customer.findMany({
+      where: {
+        OR: [
+          { firstName: { contains: query, mode: 'insensitive' } },
+          { lastName: { contains: query, mode: 'insensitive' } },
+          { email: { contains: query, mode: 'insensitive' } },
+          { phone: { contains: query, mode: 'insensitive' } },
+        ],
+      },
+      take: limit,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        location: true,
+      },
+    });
+
+    return customers;
+  }
+
+  /**
+   * Upload customer avatar
+   */
+  async uploadAvatar(customerId: string, file: Express.Multer.File) {
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!customer) {
+      throw new AppError(404, 'Customer not found');
+    }
+
+    // Delete old avatar if exists
+    if (customer.avatar) {
+      try {
+        const oldAvatarPath = path.join(process.cwd(), customer.avatar);
+        await fs.unlink(oldAvatarPath);
+      } catch (error) {
+        logger.warn(`Failed to delete old avatar:`, error);
+        // Continue with new avatar upload even if old deletion fails
+      }
+    }
+
+    // Update customer with new avatar path
+    const relativePath = file.path.replace(/\\/g, '/');
+    const updated = await prisma.customer.update({
+      where: { id: customerId },
+      data: { avatar: `/${relativePath}` },
+    });
+
+    logger.info(`Avatar uploaded for customer: ${customer.email}`);
+    return updated;
   }
 }

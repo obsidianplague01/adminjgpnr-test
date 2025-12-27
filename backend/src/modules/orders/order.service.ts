@@ -14,14 +14,12 @@ import { emailQueue } from '../../config/queue';
 import { logger } from '../../utils/logger';
 import { invalidateCache } from '../../middleware/cache';
 
-
 const ticketService = new TicketService();
 
 export class OrderService {
   /**
    * Generate unique order number: ORD-YYYYMMDD-XXXX
    */
-
   private generateOrderNumber(): string {
     const date = new Date();
     const year = date.getFullYear();
@@ -36,100 +34,45 @@ export class OrderService {
    * Create new order with tickets
    */
   async createOrder(data: CreateOrderInput) {
-    
-    const customer = await prisma.customer.findUnique({
-      where: { id: data.customerId },
-    });
-
-    if (!customer) {
-      throw new AppError(404, 'Customer not found');
-    }
-    
-    
-    // Generate unique order number
-    let orderNumber = this.generateOrderNumber();
-    let attempts = 0;
-    
-    // Ensure uniqueness
-    while (attempts < 5) {
-      const existing = await prisma.order.findUnique({
-        where: { orderNumber },
-      });
-      
-      if (!existing) break;
-      
-      orderNumber = this.generateOrderNumber();
-      attempts++;
-    }
-
-    if (attempts === 5) {
-      throw new AppError(500, 'Failed to generate unique order number');
-    }
-
-    // Create order in transaction
-    const order = await prisma.$transaction(async (tx) => {
-      // Create order
-      const newOrder = await tx.order.create({
-        data: {
-          orderNumber,
-          customerId: data.customerId,
-          quantity: data.quantity,
-          amount: data.amount,
-          status: OrderStatus.PENDING,
-          purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : new Date(),
-        },
-        include: {
-          customer: true,
-        },
-      });
-
-      // Create tickets for this order
-      const tickets = [];
-      const settings = await ticketService.getSettings();
-      
-      for (let i = 0; i < data.quantity; i++) {
-        const ticketCode = this.generateTicketCode();
-        const validUntil = this.addDays(new Date(), settings.validityDays);
-
-        const ticket = await tx.ticket.create({
-          data: {
-            ticketCode,
-            orderId: newOrder.id,
-            gameSession: data.gameSession,
-            validUntil,
-            maxScans: settings.maxScanCount,
-            scanWindow: settings.scanWindowDays,
-          },
-        });
-
-        tickets.push(ticket);
-      }
-
-      return { ...newOrder, tickets };
-    });
-
-    // Invalidate related caches (outside transaction)
-    await invalidateCache('api:/analytics/*');
-    await invalidateCache('api:/orders*');
-
-    // Queue confirmation email
-    await emailQueue.add('order-confirmation', {
-      orderId: order.id,
-      customerEmail: customer.email,
-      orderNumber: order.orderNumber,
-    });
-
-    logger.info(`Order created: ${order.orderNumber} for customer ${customer.email}`);
     const start = Date.now();
-  
+    
     monitoring.addBreadcrumb('Creating order', {
       customerId: data.customerId,
       quantity: data.quantity,
     });
 
     try {
+      const customer = await prisma.customer.findUnique({
+        where: { id: data.customerId },
+      });
+
+      if (!customer) {
+        throw new AppError(404, 'Customer not found');
+      }
       
+      // Generate unique order number
+      let orderNumber = this.generateOrderNumber();
+      let attempts = 0;
+      
+      // Ensure uniqueness
+      while (attempts < 5) {
+        const existing = await prisma.order.findUnique({
+          where: { orderNumber },
+        });
+        
+        if (!existing) break;
+        
+        orderNumber = this.generateOrderNumber();
+        attempts++;
+      }
+
+      if (attempts === 5) {
+        throw new AppError(500, 'Failed to generate unique order number');
+      }
+
+      // Create order in transaction
       const order = await prisma.$transaction(async (tx) => {
+        // Create order
         const newOrder = await tx.order.create({
           data: {
             orderNumber,
@@ -144,9 +87,10 @@ export class OrderService {
           },
         });
 
+        // Create tickets for this order
         const tickets = [];
         const settings = await ticketService.getSettings();
-
+        
         for (let i = 0; i < data.quantity; i++) {
           const ticketCode = this.generateTicketCode();
           const validUntil = this.addDays(new Date(), settings.validityDays);
@@ -168,6 +112,19 @@ export class OrderService {
         return { ...newOrder, tickets };
       });
 
+      // Invalidate related caches (outside transaction)
+      await invalidateCache('api:/analytics/*');
+      await invalidateCache('api:/orders*');
+
+      // Queue confirmation email
+      await emailQueue.add('order-confirmation', {
+        orderId: order.id,
+        customerEmail: customer.email,
+        orderNumber: order.orderNumber,
+      });
+
+      logger.info(`Order created: ${order.orderNumber} for customer ${customer.email}`);
+      
       monitoring.trackPerformance('createOrder', Date.now() - start);
       
       return order;
@@ -178,7 +135,6 @@ export class OrderService {
       });
       throw error;
     }
-    
   }
 
   /**

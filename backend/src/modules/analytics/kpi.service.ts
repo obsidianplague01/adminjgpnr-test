@@ -1,5 +1,4 @@
 // backend/src/modules/analytics/kpi.service.ts
-import { Prisma } from '@prisma/client';
 import prisma from '../../config/database';
 import { 
   DashboardKPIs, 

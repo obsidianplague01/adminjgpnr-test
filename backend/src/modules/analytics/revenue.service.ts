@@ -1,5 +1,4 @@
 // backend/src/modules/analytics/revenue.service.ts
-import { Prisma } from '@prisma/client';
 import prisma from '../../config/database';
 import { 
   RevenueOverview, 
@@ -8,7 +7,7 @@ import {
   TimePeriod 
 } from './analytics.types';
 import { logger } from '../../utils/logger';
-import { startOfMonth, endOfMonth, format, eachMonthOfInterval } from 'date-fns';
+import {endOfMonth, format, eachMonthOfInterval } from 'date-fns';
 
 export class RevenueService {
   /**
@@ -122,15 +121,20 @@ export class RevenueService {
     });
 
     // Calculate achievement percentages
-    return targets.map(target => ({
-      month: target.month,
-      target: Number(target.target),
-      actual: Number(target.actual),
-      achievement: target.target > 0 
-        ? (Number(target.actual) / Number(target.target)) * 100 
-        : 0,
-      status: this.getTargetStatus(Number(target.actual), Number(target.target)),
-    }));
+    return targets.map(target => {
+      const targetValue = Number(target.target);
+      const actualValue = Number(target.actual);
+      
+      return {
+        month: target.month,
+        target: targetValue,
+        actual: actualValue,
+        achievement: targetValue > 0 
+          ? (actualValue / targetValue) * 100 
+          : 0,
+        status: this.getTargetStatus(actualValue, targetValue),
+      };
+    });
   }
 
   /**

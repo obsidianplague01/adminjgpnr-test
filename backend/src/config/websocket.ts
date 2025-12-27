@@ -1,117 +1,215 @@
 // src/config/websocket.ts
 import { Server as HTTPServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { logger } from '../utils/logger';
-import { JWTPayload } from '../middleware/auth';
+import prisma from './database';
 
-let io: SocketIOServer;
+let io: Server;
 
-export const initializeWebSocket = (httpServer: HTTPServer) => {
-  io = new SocketIOServer(httpServer, {
+interface SocketUser {
+  id: string;
+  email: string;
+  role: string;
+}
+
+interface AuthSocket extends Socket {
+  user?: SocketUser;
+}
+
+/**
+ * Initialize WebSocket server
+ */
+export const initializeWebSocket = (server: HTTPServer) => {
+  io = new Server(server, {
     cors: {
-      origin: process.env.CORS_ORIGIN?.split(',') || 'http://localhost:3000',
+      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
       credentials: true,
     },
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   // Authentication middleware
-  io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
-
-    if (!token) {
-      return next(new Error('Authentication token required'));
-    }
-
+  io.use(async (socket: AuthSocket, next) => {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
-      socket.data.user = decoded;
+      const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
+
+      if (!token) {
+        return next(new Error('Authentication token required'));
+      }
+
+      const jwtSecret = process.env.JWT_SECRET;
+      if (!jwtSecret) {
+        logger.error('JWT_SECRET not configured');
+        return next(new Error('Server configuration error'));
+      }
+
+      const decoded = jwt.verify(token, jwtSecret) as { userId: string };
+
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.userId },
+        select: {
+          id: true,
+          email: true,
+          role: true,
+        },
+      });
+
+      if (!user) {
+        return next(new Error('User not found'));
+      }
+
+      socket.user = user;
       next();
-    } catch (error) {
-      next(new Error('Invalid token'));
+    } catch (error: any) {
+      logger.error('WebSocket authentication error:', error);
+      next(new Error('Authentication failed'));
     }
   });
 
-  io.on('connection', (socket) => {
-    const userId = socket.data.user.userId;
-    const userRole = socket.data.user.role;
-
-    logger.info(`WebSocket connected: ${userId}`);
+  // Connection handler
+  io.on('connection', (socket: AuthSocket) => {
+    logger.info(`Client connected: ${socket.id} (User: ${socket.user?.email})`);
 
     // Join user-specific room
-    socket.join(`user:${userId}`);
-
-    // Join role-specific rooms
-    socket.join(`role:${userRole}`);
-
-    // Admin joins admin room
-    if (userRole === 'SUPER_ADMIN' || userRole === 'ADMIN') {
-      socket.join('admins');
+    if (socket.user) {
+      socket.join(`user:${socket.user.id}`);
+      
+      // Join admin room if user is admin
+      if (socket.user.role === 'admin' || socket.user.role === 'superadmin') {
+        socket.join('admins');
+      }
     }
 
-    // Handle client events
-    socket.on('subscribe:order', (orderId: string) => {
-      socket.join(`order:${orderId}`);
-      logger.debug(`User ${userId} subscribed to order ${orderId}`);
+    // Handle ticket scan events
+    socket.on('scan:ticket', async (data) => {
+      try {
+        if (!socket.user) {
+          socket.emit('error', { message: 'Unauthorized' });
+          return;
+        }
+
+        logger.info(`Ticket scan event from ${socket.user.email}:`, data);
+        
+        // Emit to admins room
+        io.to('admins').emit('scan:new', {
+          ticketCode: data.ticketCode,
+          scannedBy: socket.user.email,
+          timestamp: new Date(),
+        });
+      } catch (error: any) {
+        logger.error('Ticket scan event error:', error);
+        socket.emit('error', { message: 'Failed to process scan event' });
+      }
     });
 
-    socket.on('subscribe:ticket', (ticketId: string) => {
-      socket.join(`ticket:${ticketId}`);
-      logger.debug(`User ${userId} subscribed to ticket ${ticketId}`);
+    // Handle order updates
+    socket.on('order:update', async (data) => {
+      try {
+        if (!socket.user) {
+          socket.emit('error', { message: 'Unauthorized' });
+          return;
+        }
+
+        logger.info(`Order update event from ${socket.user.email}:`, data);
+        
+        // Emit to specific user and admins
+        io.to(`user:${data.customerId}`).emit('order:updated', data);
+        io.to('admins').emit('order:updated', data);
+      } catch (error: any) {
+        logger.error('Order update event error:', error);
+        socket.emit('error', { message: 'Failed to process order update' });
+      }
     });
 
-    socket.on('unsubscribe:order', (orderId: string) => {
-      socket.leave(`order:${orderId}`);
+    // Handle analytics requests
+    socket.on('analytics:subscribe', async () => {
+      try {
+        if (!socket.user) {
+          socket.emit('error', { message: 'Unauthorized' });
+          return;
+        }
+
+        // Only allow admin users
+        if (socket.user.role !== 'admin' && socket.user.role !== 'superadmin') {
+          socket.emit('error', { message: 'Insufficient permissions' });
+          return;
+        }
+
+        socket.join('analytics');
+        logger.info(`User ${socket.user.email} subscribed to analytics`);
+      } catch (error: any) {
+        logger.error('Analytics subscribe error:', error);
+        socket.emit('error', { message: 'Failed to subscribe to analytics' });
+      }
     });
 
-    socket.on('unsubscribe:ticket', (ticketId: string) => {
-      socket.leave(`ticket:${ticketId}`);
+    // Handle disconnection
+    socket.on('disconnect', (reason) => {
+      logger.info(`Client disconnected: ${socket.id} (Reason: ${reason})`);
     });
 
-    socket.on('disconnect', () => {
-      logger.info(`WebSocket disconnected: ${userId}`);
+    // Handle errors
+    socket.on('error', (error) => {
+      logger.error('Socket error:', error);
     });
   });
 
   logger.info('WebSocket server initialized');
-  return io;
 };
 
-export const getIO = (): SocketIOServer => {
+/**
+ * Get Socket.IO instance
+ */
+export const getIO = (): Server => {
   if (!io) {
     throw new Error('WebSocket not initialized');
   }
   return io;
 };
 
-// Notification emitters
-export const emitNotification = (userId: string, notification: any) => {
-  if (io) {
-    io.to(`user:${userId}`).emit('notification', notification);
+/**
+ * Emit event to specific user
+ */
+export const emitToUser = (userId: string, event: string, data: any) => {
+  try {
+    if (!io) {
+      logger.warn('WebSocket not initialized, cannot emit to user');
+      return;
+    }
+    io.to(`user:${userId}`).emit(event, data);
+  } catch (error) {
+    logger.error('Error emitting to user:', error);
   }
 };
 
+/**
+ * Emit event to all admin users
+ */
 export const emitToAdmins = (event: string, data: any) => {
-  if (io) {
+  try {
+    if (!io) {
+      logger.warn('WebSocket not initialized, cannot emit to admins');
+      return;
+    }
     io.to('admins').emit(event, data);
+  } catch (error) {
+    logger.error('Error emitting to admins:', error);
   }
 };
 
-export const emitOrderUpdate = (orderId: string, data: any) => {
-  if (io) {
-    io.to(`order:${orderId}`).emit('order:update', data);
+/**
+ * Emit event to all connected clients
+ */
+export const emitToAll = (event: string, data: any) => {
+  try {
+    if (!io) {
+      logger.warn('WebSocket not initialized, cannot emit to all');
+      return;
+    }
+    io.emit(event, data);
+  } catch (error) {
+    logger.error('Error emitting to all:', error);
   }
 };
-
-export const emitTicketUpdate = (ticketId: string, data: any) => {
-  if (io) {
-    io.to(`ticket:${ticketId}`).emit('ticket:update', data);
-  }
-};
-
-export const emitScanEvent = (scanData: any) => {
-  if (io) {
-    io.to('admins').emit('scan:new', scanData);
-  }
-};
-

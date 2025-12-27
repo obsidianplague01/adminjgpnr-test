@@ -78,7 +78,6 @@ export class TicketService {
   }
 
   async listTickets(filters: ListTicketsInput) {
-    // Implementation from previous artifact
     const page = filters.page || 1;
     const limit = Math.min(filters.limit || 20, 100);
     const skip = (page - 1) * limit;
@@ -269,56 +268,58 @@ export class TicketService {
   }
 
   async scanTicket(data: ScanTicketInput) {
-    const validation = await this.validateTicket({
+    const start = Date.now();
+    
+    monitoring.addBreadcrumb('Ticket scanned', {
       ticketCode: data.ticketCode,
     });
 
-    const scanRecord = await prisma.ticketScan.create({
-      data: {
-        ticketId: validation.ticket!.id,
-        scannedBy: data.scannedBy,
-        location: data.location,
-        allowed: validation.valid,
-        reason: validation.reason,
-      },
-    });
-
-    if (validation.valid) {
-      const updateData: any = {
-        scanCount: { increment: 1 },
-        lastScanAt: new Date(),
-      };
-
-      if (!validation.ticket!.firstScanAt) {
-        updateData.firstScanAt = new Date();
-      }
-
-      if (validation.ticket!.scanCount + 1 >= validation.ticket!.maxScans) {
-        updateData.status = TicketStatus.SCANNED;
-      }
-
-      await prisma.ticket.update({
-        where: { id: validation.ticket!.id },
-        data: updateData,
-      });
-
-      logger.info(`Ticket scanned: ${data.ticketCode} by ${data.scannedBy}`);
-    } else {
-      logger.warn(`Scan denied: ${data.ticketCode} - ${validation.reason}`);
-    }
-    const start = Date.now();
-  
     try {
-      const result = await this.validateTicket({ ticketCode: data.ticketCode });
-      
-      monitoring.addBreadcrumb('Ticket scanned', {
+      const validation = await this.validateTicket({
         ticketCode: data.ticketCode,
-        valid: result.valid,
       });
-      
+
+      const scanRecord = await prisma.ticketScan.create({
+        data: {
+          ticketId: validation.ticket!.id,
+          scannedBy: data.scannedBy,
+          location: data.location,
+          allowed: validation.valid,
+          reason: validation.reason,
+        },
+      });
+
+      if (validation.valid) {
+        const updateData: any = {
+          scanCount: { increment: 1 },
+          lastScanAt: new Date(),
+        };
+
+        if (!validation.ticket!.firstScanAt) {
+          updateData.firstScanAt = new Date();
+        }
+
+        if (validation.ticket!.scanCount + 1 >= validation.ticket!.maxScans) {
+          updateData.status = TicketStatus.SCANNED;
+        }
+
+        await prisma.ticket.update({
+          where: { id: validation.ticket!.id },
+          data: updateData,
+        });
+
+        logger.info(`Ticket scanned: ${data.ticketCode} by ${data.scannedBy}`);
+      } else {
+        logger.warn(`Scan denied: ${data.ticketCode} - ${validation.reason}`);
+      }
+
       monitoring.trackPerformance('scanTicket', Date.now() - start);
-      
-      return result;
+
+      return {
+        ...validation,
+        scanId: scanRecord.id,
+        scannedAt: scanRecord.scannedAt,
+      };
     } catch (error) {
       monitoring.captureException(error as Error, {
         operation: 'scanTicket',
@@ -326,11 +327,6 @@ export class TicketService {
       });
       throw error;
     }
-    return {
-      ...validation,
-      scanId: scanRecord.id,
-      scannedAt: scanRecord.scannedAt,
-    };
   }
 
   async getScanHistory(_filters: { ticketId?: string; limit?: number }) {
