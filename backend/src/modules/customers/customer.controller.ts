@@ -6,7 +6,7 @@ import {
   UpdateCustomerInput,
   ListCustomersInput,
 } from './customer.schema';
-import ;
+
 const customerService = new CustomerService();
 
 export const createCustomer = asyncHandler(async (req: Request, res: Response) => {
