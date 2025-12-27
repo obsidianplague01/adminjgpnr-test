@@ -11,6 +11,7 @@ import { initializeSentry } from './config/monitoring';
 import prisma from './config/database';
 import { emailWorker, campaignWorker } from './jobs/email.jobs';
 import { reportWorker, initializeScheduler } from './jobs/scheduler.jobs';
+import { analyticsWorker, initializeAnalyticsJobs } from './jobs/analytics.jobs';
 import fs from 'fs';
 
 const PORT = process.env.PORT || 5000;
@@ -21,6 +22,8 @@ const directories = [
   'uploads',
   'uploads/qrcodes',
   'uploads/tickets',
+  'uploads/documents',
+  'uploads/customer-documents',
 ];
 
 directories.forEach(dir => {
@@ -40,6 +43,8 @@ const requiredEnvVars = [
   'SMTP_USER',
   'SMTP_PASSWORD',
   'QR_ENCRYPTION_KEY',
+  'REDIS_HOST',
+  'REDIS_PORT',
 ];
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -68,6 +73,10 @@ const startServer = async () => {
     await initializeScheduler();
     logger.info('Report scheduler initialized');
 
+    // Initialize analytics jobs
+    await initializeAnalyticsJobs();
+    logger.info('Analytics jobs initialized');
+
     // Start queue workers
     logger.info('Queue workers started');
 
@@ -84,6 +93,7 @@ const startServer = async () => {
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`Health check: http://localhost:${PORT}/health`);
       logger.info(`WebSocket: ws://localhost:${PORT}`);
+      logger.info(`Analytics: http://localhost:${PORT}/api/analytics`);
     });
 
     // Graceful shutdown
@@ -101,6 +111,7 @@ const startServer = async () => {
         await emailWorker.close();
         await campaignWorker.close();
         await reportWorker.close();
+        await analyticsWorker.close();
         logger.info('Queue workers closed');
 
         process.exit(0);

@@ -1,3 +1,4 @@
+// backend/prisma/schema.prisma 
 generator client {
   provider = "prisma-client-js"
 }
@@ -59,10 +60,11 @@ model User {
   
   auditLogs     AuditLog[]
   notifications Notification[]
-
   loginActivities LoginActivity[]
   activeSessions  ActiveSession[]
   
+  @@index([email])
+  @@index([role, isActive])
   @@map("users")
 }
 
@@ -89,6 +91,10 @@ model Customer {
   orders        Order[]
   
   @@index([email])
+  @@index([status])
+  @@index([createdAt, status])
+  @@index([totalSpent])
+  @@index([lastPurchase])
   @@map("customers")
 }
 
@@ -109,6 +115,9 @@ model Order {
   @@index([customerId])
   @@index([orderNumber])
   @@index([status])
+  @@index([purchaseDate, status])
+  @@index([customerId, status])
+  @@index([createdAt, status])
   @@map("orders")
 }
 
@@ -134,6 +143,10 @@ model Ticket {
   @@index([ticketCode])
   @@index([status])
   @@index([orderId])
+  @@index([createdAt, status])
+  @@index([gameSession, status])
+  @@index([validUntil, status])
+  @@index([firstScanAt])
   @@map("tickets")
 }
 
@@ -150,6 +163,8 @@ model TicketScan {
   
   @@index([ticketId])
   @@index([scannedAt])
+  @@index([scannedAt, allowed])
+  @@index([ticketId, scannedAt])
   @@map("ticket_scans")
 }
 
@@ -177,8 +192,11 @@ model Subscriber {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
+  tracking      CampaignTracking[]
+  
   @@index([email])
   @@index([status])
+  @@index([subscribedAt])
   @@map("subscribers")
 }
 
@@ -194,6 +212,7 @@ model EmailTemplate {
   
   campaigns     Campaign[]
   
+  @@index([category, status])
   @@map("email_templates")
 }
 
@@ -211,9 +230,34 @@ model Campaign {
   updatedAt     DateTime       @updatedAt
   
   template      EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  tracking      CampaignTracking[]
   
   @@index([status])
+  @@index([sentAt])
   @@map("campaigns")
+}
+
+// NEW: Campaign Tracking
+model CampaignTracking {
+  id            String   @id @default(cuid())
+  campaignId    String
+  subscriberId  String
+  opened        Boolean  @default(false)
+  openedAt      DateTime?
+  clicked       Boolean  @default(false)
+  clickedAt     DateTime?
+  converted     Boolean  @default(false)
+  convertedAt   DateTime?
+  createdAt     DateTime @default(now())
+  
+  campaign      Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  subscriber    Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  
+  @@unique([campaignId, subscriberId])
+  @@index([campaignId])
+  @@index([subscriberId])
+  @@index([opened, clicked, converted])
+  @@map("campaign_tracking")
 }
 
 model Notification {
@@ -230,6 +274,7 @@ model Notification {
   
   @@index([userId])
   @@index([read])
+  @@index([createdAt])
   @@map("notifications")
 }
 
@@ -249,8 +294,10 @@ model AuditLog {
   @@index([userId])
   @@index([entity])
   @@index([createdAt])
+  @@index([action, entity])
   @@map("audit_logs")
 }
+
 model LoginActivity {
   id          String   @id @default(cuid())
   userId      String
@@ -258,15 +305,17 @@ model LoginActivity {
   userAgent   String
   device      String?
   location    String?
-  status      String   @default("success") // success, failed
+  status      String   @default("success")
   timestamp   DateTime @default(now())
   
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   @@index([userId])
   @@index([timestamp])
+  @@index([status])
   @@map("login_activities")
 }
+
 model ActiveSession {
   id          String   @id @default(cuid())
   userId      String
@@ -283,8 +332,10 @@ model ActiveSession {
   
   @@index([userId])
   @@index([token])
+  @@index([expiresAt])
   @@map("active_sessions")
 }
+
 model SystemSettings {
   id                Int      @id @default(1)
   
@@ -305,7 +356,7 @@ model SystemSettings {
   currencySymbol    String   @default("₦")
   timezone          String   @default("Africa/Lagos")
   dateFormat        String   @default("DD/MM/YYYY")
-  timeFormat        String   @default("12") // 12 or 24 hour
+  timeFormat        String   @default("12")
 
   operatingDays     Json     @default("[\"monday\",\"tuesday\",\"wednesday\",\"thursday\",\"friday\",\"saturday\",\"sunday\"]")
   openingTime       String   @default("08:00")
@@ -315,7 +366,6 @@ model SystemSettings {
   emailFooter       String   @default("© JGPNR Paintball. All rights reserved.")
   emailFooterEnabled Boolean @default(true)
   
- 
   paystackEnabled   Boolean  @default(true)
   paystackPublicKey String?
   paystackSecretKey String?
@@ -327,7 +377,7 @@ model SystemSettings {
   
   autoConfirmPayment   Boolean @default(false)
   allowPartialPayment  Boolean @default(false)
-  paymentTimeout       Int     @default(30) 
+  paymentTimeout       Int     @default(30)
   sendPaymentReceipt   Boolean @default(true)
   
   emailNotifications   Boolean @default(true)
@@ -340,4 +390,31 @@ model SystemSettings {
   updatedAt         DateTime @updatedAt
   
   @@map("system_settings")
+}
+
+// NEW: Analytics Cache
+model AnalyticsCache {
+  id          String   @id @default(cuid())
+  cacheKey    String   @unique
+  data        Json
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  
+  @@index([cacheKey, expiresAt])
+  @@index([expiresAt])
+  @@map("analytics_cache")
+}
+
+// NEW: Revenue Targets
+model RevenueTarget {
+  id          String   @id @default(cuid())
+  month       String   // YYYY-MM
+  target      Decimal  @db.Decimal(10, 2)
+  actual      Decimal  @db.Decimal(10, 2) @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([month])
+  @@index([month])
+  @@map("revenue_targets")
 }
