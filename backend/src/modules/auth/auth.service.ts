@@ -6,8 +6,17 @@ import { LoginInput, CreateUserInput, UpdateUserInput, ChangePasswordInput } fro
 import { JWTPayload } from '../../middleware/auth';
 import { logger } from '../../utils/logger';
 import jwt, { SignOptions } from 'jsonwebtoken';
+import * as speakeasy from 'speakeasy';
+import * as QRCode from 'qrcode';
 
 const SALT_ROUNDS = 12;
+interface ListUsersInput {
+  page: number;
+  limit: number;
+  search?: string;
+  role?: string;
+  status?: string;
+}
 
 export class AuthService {
   async login(data: LoginInput) {
@@ -51,6 +60,7 @@ export class AuthService {
 
     logger.info(`User logged in: ${user.email}`);
 
+  
     return {
       user: {
         id: user.id,
@@ -196,38 +206,59 @@ export class AuthService {
     return { message: 'Password changed successfully' };
   }
 
-  async listUsers(page = 1, limit = 20) {
-    const skip = (page - 1) * limit;
+  async listUsers(filters: ListUsersInput) {
+  const page = filters.page || 1;
+  const limit = Math.min(filters.limit || 20, 100);
+  const skip = (page - 1) * limit;
 
-    const [users, total] = await Promise.all([
-      prisma.user.findMany({
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          role: true,
-          isActive: true,
-          lastLoginAt: true,
-          createdAt: true,
-        },
-      }),
-      prisma.user.count(),
-    ]);
+  const where: Prisma.UserWhereInput = {};
 
-    return {
-      users,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
+  if (filters.role) {
+    where.role = filters.role as UserRole;
+  }
+
+  if (filters.status) {
+    // Note: User model uses isActive (boolean), not status (string)
+    where.isActive = filters.status === 'active';
+  }
+
+  if (filters.search) {
+    where.OR = [
+      { email: { contains: filters.search, mode: 'insensitive' } },
+      { firstName: { contains: filters.search, mode: 'insensitive' } },
+      { lastName: { contains: filters.search, mode: 'insensitive' } },
+    ];
+  }
+
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        isActive: true,
+        lastLoginAt: true,
+        createdAt: true,
       },
-    };
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  return {
+    users,
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+    },
+  };
   }
 
   async deactivateUser(userId: string) {
@@ -240,4 +271,191 @@ export class AuthService {
 
     return { message: 'User deactivated successfully' };
   }
+  async reactivateUser(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  if (!user) {
+    throw new AppError(404, 'User not found');
+  }
+
+  if (user.isActive) {
+    throw new AppError(400, 'User is already active');
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: { isActive: true },
+  });
+
+  logger.info(`User reactivated: ${updated.email}`);
+  return updated;
+  }
+  async deleteUser(userId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new AppError(404, 'User not found');
+    }
+
+    if (user.role === UserRole.SUPER_ADMIN) {
+      throw new AppError(403, 'Cannot delete super admin');
+    }
+
+    await prisma.user.delete({
+      where: { id: userId },
+    });
+
+    logger.info(`User deleted: ${user.email}`);
+    return { message: 'User deleted successfully' };
+  }
+  async getUserActivity(userId: string, limit = 10) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new AppError(404, 'User not found');
+    }
+
+    // Fetch recent audit logs for this user
+    const activity = await prisma.auditLog.findMany({
+      where: { userId },
+      orderBy: { timestamp: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        action: true,
+        resource: true,
+        details: true,
+        timestamp: true,
+        ipAddress: true,
+      },
+    });
+
+    return {
+      userId: user.id,
+      email: user.email,
+      lastLoginAt: user.lastLoginAt,
+      activity,
+    };
+  }
+  async enable2FA(userId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new AppError(404, 'User not found');
+    }
+
+    if (user.twoFactorEnabled) {
+      throw new AppError(400, '2FA is already enabled');
+    }
+
+    // Generate secret
+    const secret = speakeasy.generateSecret({
+      name: `JGPNR (${user.email})`,
+      issuer: 'JGPNR Admin',
+    });
+
+    // Generate backup codes
+    const backupCodes = Array.from({ length: 10 }, () =>
+      crypto.randomBytes(4).toString('hex').toUpperCase()
+    );
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        twoFactorSecret: secret.base32,
+        twoFactorBackupCodes: JSON.stringify(backupCodes),
+      },
+    });
+
+    // Generate QR code
+    const qrCode = await QRCode.toDataURL(secret.otpauth_url!);
+
+    logger.info(`2FA setup initiated for user: ${user.email}`);
+
+    return {
+      secret: secret.base32,
+      qrCode,
+      backupCodes,
+      message: 'Scan QR code with authenticator app and verify',
+    };
+  }
+  async verify2FA(userId: string, code: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user || !user.twoFactorSecret) {
+      throw new AppError(400, '2FA not set up');
+    }
+
+    // Verify code
+    const verified = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: 'base32',
+      token: code,
+      window: 2, // Allow 2 time steps before/after
+    });
+
+    if (!verified) {
+      throw new AppError(400, 'Invalid verification code');
+    }
+
+    // Enable 2FA
+    await prisma.user.update({
+      where: { id: userId },
+      data: { twoFactorEnabled: true },
+    });
+
+    logger.info(`2FA enabled for user: ${user.email}`);
+
+    return {
+      message: '2FA successfully enabled',
+      enabled: true,
+    };
+  }
+  async disable2FA(userId: string, password: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new AppError(404, 'User not found');
+    }
+
+    if (!user.twoFactorEnabled) {
+      throw new AppError(400, '2FA is not enabled');
+    }
+
+    // Verify password
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      throw new AppError(401, 'Invalid password');
+    }
+
+    // Disable 2FA
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        twoFactorEnabled: false,
+        twoFactorSecret: null,
+        twoFactorBackupCodes: null,
+      },
+    });
+
+    logger.info(`2FA disabled for user: ${user.email}`);
+
+    return {
+      message: '2FA successfully disabled',
+      enabled: false,
+    };
+  }
+  
 }

@@ -1,11 +1,10 @@
-// src/middleware/rateLimit.ts - FIXED VERSION
+// src/middleware/rateLimit.ts 
 import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
 import { createClient } from 'redis';
 import { Request, Response } from 'express';
 import { logger } from '../utils/logger';
 
-// Create Redis client for rate limiting
 const redisClient = createClient({
   url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,
 });
@@ -18,7 +17,6 @@ redisClient.on('connect', () => {
   logger.info('Rate limiter Redis connected');
 });
 
-// Connect Redis client
 (async () => {
   try {
     await redisClient.connect();
@@ -38,15 +36,14 @@ declare module 'express' {
   }
 }
 
-// Create Redis store
+// Fix: Pass sendCommand directly instead of client
 const createRedisStore = (prefix: string) => {
   return new RedisStore({
-    client: redisClient,
+    sendCommand: (...args: string[]) => redisClient.sendCommand(args),
     prefix: `rl:${prefix}:`,
   });
 };
 
-// General API rate limit
 export const apiLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -55,7 +52,6 @@ export const apiLimiter: RateLimitRequestHandler = rateLimit({
   legacyHeaders: false,
   store: createRedisStore('api'),
   skip: (req) => {
-    // Skip rate limiting for health checks
     return req.path === '/health' || req.path === '/api/health';
   },
   handler: (req: Request, res: Response) => {
@@ -68,9 +64,8 @@ export const apiLimiter: RateLimitRequestHandler = rateLimit({
   },
 });
 
-// Strict rate limit for auth endpoints
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 5,
   skipSuccessfulRequests: true,
   message: 'Too many login attempts, please try again later',
@@ -86,9 +81,8 @@ export const authLimiter = rateLimit({
   },
 });
 
-// Email sending rate limit
 export const emailLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 100,
   message: 'Email sending limit reached',
   store: createRedisStore('email'),
@@ -97,9 +91,8 @@ export const emailLimiter = rateLimit({
   },
 });
 
-// Order creation rate limit
 export const orderLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 20,
   message: 'Order creation limit reached',
   store: createRedisStore('order'),
@@ -108,9 +101,8 @@ export const orderLimiter = rateLimit({
   },
 });
 
-// Payment rate limit (critical - prevent abuse)
 export const paymentLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 10,
   message: 'Payment request limit reached',
   store: createRedisStore('payment'),
@@ -119,9 +111,8 @@ export const paymentLimiter = rateLimit({
   },
 });
 
-// Ticket scanning rate limit
 export const scanLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 30,
   message: 'Scanning too fast, please slow down',
   store: createRedisStore('scan'),
@@ -130,10 +121,9 @@ export const scanLimiter = rateLimit({
   },
 });
 
-// Export rate limit
 export const exportLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 2, // Increased from 1 to 2 to allow retry
+  windowMs: 60 * 1000,
+  max: 2,
   message: 'Please wait before requesting another export',
   store: createRedisStore('export'),
   keyGenerator: (req: Request) => {
@@ -141,7 +131,6 @@ export const exportLimiter = rateLimit({
   },
 });
 
-// Graceful shutdown
 export const closeRateLimiter = async () => {
   try {
     await redisClient.quit();

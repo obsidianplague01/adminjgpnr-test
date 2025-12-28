@@ -1,4 +1,4 @@
-// backend/src/modules/analytics/analytics.controller.ts (ENHANCED)
+// backend/src/modules/analytics/analytics.controller.ts
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../middleware/errorHandler';
 import { KPIService } from './kpi.service';
@@ -16,8 +16,6 @@ const performanceService = new PerformanceService();
 const customerCampaignService = new CustomerCampaignService();
 const analyticsService = new AnalyticsService();
 
-// ===== KPI ENDPOINTS =====
-
 export const getDashboardKPIs = asyncHandler(async (req: Request, res: Response) => {
   const period = (req.query.period as TimePeriod) || TimePeriod.THIRTY_DAYS;
   
@@ -26,13 +24,11 @@ export const getDashboardKPIs = asyncHandler(async (req: Request, res: Response)
   const data = await cacheService.getOrSet(
     cacheKey,
     () => kpiService.getDashboardKPIs(period),
-    300 // 5 minutes
+    300
   );
   
   res.json(data);
 });
-
-// ===== REVENUE ENDPOINTS =====
 
 export const getRevenueOverview = asyncHandler(async (req: Request, res: Response) => {
   const period = (req.query.period as TimePeriod) || TimePeriod.THIRTY_DAYS;
@@ -78,7 +74,7 @@ export const getRevenueTargets = asyncHandler(async (req: Request, res: Response
   const data = await cacheService.getOrSet(
     cacheKey,
     () => revenueService.getRevenueTargets(year),
-    600 // 10 minutes
+    600
   );
   
   res.json(data);
@@ -89,7 +85,6 @@ export const setRevenueTarget = asyncHandler(async (req: Request, res: Response)
   
   const result = await revenueService.setRevenueTarget(month, target);
   
-  // Invalidate cache
   await cacheService.deletePattern('analytics:revenue:*');
   
   res.json(result);
@@ -100,13 +95,10 @@ export const updateActualRevenue = asyncHandler(async (req: Request, res: Respon
   
   const actual = await revenueService.updateActualRevenue(month);
   
-  // Invalidate cache
   await cacheService.deletePattern('analytics:revenue:*');
   
   res.json({ month, actual });
 });
-
-// ===== TICKET PERFORMANCE ENDPOINTS =====
 
 export const getTicketPerformance = asyncHandler(async (req: Request, res: Response) => {
   const period = (req.query.period as TimePeriod) || TimePeriod.THIRTY_DAYS;
@@ -144,8 +136,6 @@ export const getTicketTrends = asyncHandler(async (req: Request, res: Response) 
   res.json(data);
 });
 
-// ===== SESSION ENDPOINTS =====
-
 export const getSessionDistribution = asyncHandler(async (req: Request, res: Response) => {
   const period = (req.query.period as TimePeriod) || TimePeriod.THIRTY_DAYS;
   
@@ -154,7 +144,7 @@ export const getSessionDistribution = asyncHandler(async (req: Request, res: Res
   const data = await cacheService.getOrSet(
     cacheKey,
     () => performanceService.getSessionDistribution(period),
-    600 // 10 minutes
+    600
   );
   
   res.json(data);
@@ -181,8 +171,6 @@ export const getSessionPerformance = asyncHandler(async (req: Request, res: Resp
   
   res.json(data);
 });
-
-// ===== CUSTOMER ENDPOINTS =====
 
 export const getCustomerGrowth = asyncHandler(async (req: Request, res: Response) => {
   const period = (req.query.period as TimePeriod) || TimePeriod.THIRTY_DAYS;
@@ -242,8 +230,6 @@ export const getCustomerSegments = asyncHandler(async (req: Request, res: Respon
   res.json(data);
 });
 
-// ===== CAMPAIGN ENDPOINTS =====
-
 export const getCampaignPerformance = asyncHandler(async (_req: Request, res: Response) => {
   const cacheKey = 'analytics:campaigns:performance';
   
@@ -278,8 +264,6 @@ export const getCampaignFunnel = asyncHandler(async (req: Request, res: Response
   res.json(data);
 });
 
-// ===== MARKETING METRICS =====
-
 export const getMarketingMetrics = asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
   
@@ -301,8 +285,6 @@ export const getMarketingMetrics = asyncHandler(async (req: Request, res: Respon
   
   res.json(data);
 });
-
-// ===== SCAN ANALYTICS =====
 
 export const getScanTrends = asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
@@ -348,13 +330,8 @@ export const getScansByLocation = asyncHandler(async (req: Request, res: Respons
   res.json(data);
 });
 
-// ===== COMPARISON & FORECASTING =====
-
 export const comparePeriods = asyncHandler(async (req: Request, res: Response) => {
   const { currentPeriod, previousPeriod, metric } = req.query;
-  
-  // Implementation would compare two periods
-  // This is a placeholder for the comparison logic
   
   res.json({
     message: 'Period comparison endpoint',
@@ -367,17 +344,12 @@ export const comparePeriods = asyncHandler(async (req: Request, res: Response) =
 export const getForecast = asyncHandler(async (req: Request, res: Response) => {
   const { period, metric } = req.query;
   
-  // Implementation would use historical data for forecasting
-  // This is a placeholder for forecasting logic
-  
   res.json({
     message: 'Forecasting endpoint',
     period,
     metric,
   });
 });
-
-// ===== EXISTING ENDPOINTS (Backward Compatibility) =====
 
 export const getDashboardOverview = asyncHandler(async (_req: Request, res: Response) => {
   const overview = await analyticsService.getDashboardOverview();
@@ -421,10 +393,19 @@ export const getCampaignStats = asyncHandler(async (_req: Request, res: Response
   res.json(stats);
 });
 
-// ===== EXPORT ENDPOINTS =====
+// Fix: Add proper type for exportData type parameter
+type ExportType = 'tickets' | 'orders' | 'customers' | 'scans';
 
 export const exportData = asyncHandler(async (req: Request, res: Response) => {
-  const { type } = req.params;
+  const type = req.params.type as ExportType;
+  
+  // Validate type
+  const validTypes: ExportType[] = ['tickets', 'orders', 'customers', 'scans'];
+  if (!validTypes.includes(type)) {
+    res.status(400).json({ error: 'Invalid export type' });
+    return;
+  }
+  
   const csv = await analyticsService.exportData(
     type,
     req.query.startDate as string,
@@ -443,7 +424,6 @@ export const exportCustomReport = asyncHandler(async (req: Request, res: Respons
   
   logger.info('Custom report export requested', { metrics, format });
   
-  // Implementation would generate custom reports based on selected metrics
   res.json({
     message: 'Custom report generation',
     metrics,
@@ -451,8 +431,6 @@ export const exportCustomReport = asyncHandler(async (req: Request, res: Respons
     dateRange: { startDate, endDate },
   });
 });
-
-// ===== CACHE MANAGEMENT =====
 
 export const invalidateCache = asyncHandler(async (req: Request, res: Response) => {
   const { pattern } = req.body;

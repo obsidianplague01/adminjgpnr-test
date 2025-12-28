@@ -1,21 +1,27 @@
-// backend/src/modules/analytics/analytics.routes.ts 
+// src/modules/analytics/analytics.routes.ts - FIXED
 import { Router } from 'express';
 import * as analyticsController from './analytics.controller';
 import { authenticateJWT, requireAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { cache } from '../../middleware/cache';
-import { exportLimiter } from '../../middleware/rateLimit';
+import { exportLimiter, apiLimiter } from '../../middleware/rateLimit';
 import { analyticsQuerySchema } from './analytics.schema';
 import * as forecastingController from './forecasting.controller';
 import * as excelExportController from './excel-export.controller';
+
 const router = Router();
+
+// All analytics routes require admin authentication
 router.use(authenticateJWT, requireAdmin);
+
+// Apply rate limiting to all analytics endpoints
+router.use(apiLimiter);
 
 // ===== DASHBOARD KPIs =====
 router.get(
   '/kpi',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300, prefix: 'analytics:kpi' }),
+  cache(300), // 5 minutes cache
   analyticsController.getDashboardKPIs
 );
 
@@ -23,20 +29,20 @@ router.get(
 router.get(
   '/revenue/overview',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getRevenueOverview
 );
 
 router.get(
   '/revenue/breakdown',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getRevenueBreakdown
 );
 
 router.get(
   '/revenue/targets',
-  cache({ ttl: 600 }),
+  cache(600), // 10 minutes
   analyticsController.getRevenueTargets
 );
 
@@ -44,14 +50,14 @@ router.get(
 router.get(
   '/tickets/performance',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getTicketPerformance
 );
 
 router.get(
   '/tickets/trends',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getTicketTrends
 );
 
@@ -59,14 +65,14 @@ router.get(
 router.get(
   '/sessions/distribution',
   validate(analyticsQuerySchema),
-  cache({ ttl: 600 }),
+  cache(600),
   analyticsController.getSessionDistribution
 );
 
 router.get(
   '/sessions/performance',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getSessionPerformance
 );
 
@@ -74,35 +80,35 @@ router.get(
 router.get(
   '/customers/growth',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getCustomerGrowth
 );
 
 router.get(
   '/customers/retention',
   validate(analyticsQuerySchema),
-  cache({ ttl: 600 }),
+  cache(600),
   analyticsController.getCustomerRetention
 );
 
 router.get(
   '/customers/segments',
   validate(analyticsQuerySchema),
-  cache({ ttl: 600 }),
+  cache(600),
   analyticsController.getCustomerSegments
 );
 
 // ===== CAMPAIGN ANALYTICS =====
 router.get(
   '/campaigns/performance',
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getCampaignPerformance
 );
 
 router.get(
   '/campaigns/funnel',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getCampaignFunnel
 );
 
@@ -110,7 +116,7 @@ router.get(
 router.get(
   '/marketing/metrics',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getMarketingMetrics
 );
 
@@ -118,14 +124,14 @@ router.get(
 router.get(
   '/scans/trends',
   validate(analyticsQuerySchema),
-  cache({ ttl: 300 }),
+  cache(300),
   analyticsController.getScanTrends
 );
 
 router.get(
   '/scans/locations',
   validate(analyticsQuerySchema),
-  cache({ ttl: 600 }),
+  cache(600),
   analyticsController.getScansByLocation
 );
 
@@ -133,29 +139,50 @@ router.get(
 router.get(
   '/compare',
   validate(analyticsQuerySchema),
-  cache({ ttl: 600 }),
+  cache(600),
   analyticsController.comparePeriods
 );
 
 router.get(
   '/forecast',
   validate(analyticsQuerySchema),
-  cache({ ttl: 3600 }), // 1 hour cache
+  cache(3600), // 1 hour cache for forecasts
   analyticsController.getForecast
 );
 
-// ===== EXISTING ENDPOINTS (Keep for backward compatibility) =====
-router.get('/dashboard', analyticsController.getDashboardOverview);
-router.get('/revenue', analyticsController.getRevenueMetrics);
-router.get('/tickets', analyticsController.getTicketStats);
-router.get('/customers', analyticsController.getCustomerStats);
-router.get('/scans', analyticsController.getScanStats);
-router.get('/campaigns', analyticsController.getCampaignStats);
+router.get(
+  '/forecast/revenue',
+  validate(analyticsQuerySchema),
+  cache(3600),
+  forecastingController.forecastRevenue
+);
 
-// ===== EXPORTS =====
+router.get(
+  '/forecast/tickets',
+  validate(analyticsQuerySchema),
+  cache(3600),
+  forecastingController.forecastTicketSales
+);
+
+router.get(
+  '/forecast/customers',
+  validate(analyticsQuerySchema),
+  cache(3600),
+  forecastingController.forecastCustomerGrowth
+);
+
+// ===== EXISTING ENDPOINTS (Keep for backward compatibility) =====
+router.get('/dashboard', cache(300), analyticsController.getDashboardOverview);
+router.get('/revenue', cache(300), analyticsController.getRevenueMetrics);
+router.get('/tickets', cache(300), analyticsController.getTicketStats);
+router.get('/customers', cache(300), analyticsController.getCustomerStats);
+router.get('/scans', cache(300), analyticsController.getScanStats);
+router.get('/campaigns', cache(300), analyticsController.getCampaignStats);
+
+// ===== EXPORTS (STRICT RATE LIMITING) =====
 router.post(
   '/export/:type',
-  exportLimiter,
+  exportLimiter, // 2 requests per minute
   validate(analyticsQuerySchema),
   analyticsController.exportData
 );
@@ -165,29 +192,11 @@ router.post(
   exportLimiter,
   analyticsController.exportCustomReport
 );
-router.get(
-  '/forecast/revenue',
-  validate(analyticsQuerySchema),
-  cache({ ttl: 3600 }),
-  forecastingController.forecastRevenue
-);
 
-router.get(
-  '/forecast/tickets',
-  validate(analyticsQuerySchema),
-  cache({ ttl: 3600 }),
-  forecastingController.forecastTicketSales
-);
-
-router.get(
-  '/forecast/customers',
-  validate(analyticsQuerySchema),
-  cache({ ttl: 3600 }),
-  forecastingController.forecastCustomerGrowth
-);
 router.post(
   '/export/excel',
   exportLimiter,
   excelExportController.exportAnalyticsExcel
 );
+
 export default router;

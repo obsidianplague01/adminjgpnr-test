@@ -59,10 +59,6 @@ export class CustomerService {
       ];
     }
 
-    if (filters.location) {
-      where.location = { contains: filters.location, mode: 'insensitive' };
-    }
-
     const [customers, total] = await Promise.all([
       prisma.customer.findMany({
         where,
@@ -203,17 +199,7 @@ export class CustomerService {
       );
     }
 
-    // Delete associated files if any
-    if (customer.avatar) {
-      try {
-        const avatarPath = path.join(process.cwd(), customer.avatar);
-        await fs.unlink(avatarPath);
-      } catch (error) {
-        logger.warn(`Failed to delete avatar for customer ${customerId}:`, error);
-        // Continue with customer deletion even if file deletion fails
-      }
-    }
-
+    
     await prisma.customer.delete({
       where: { id: customerId },
     });
@@ -368,7 +354,7 @@ export class CustomerService {
 /**
  * Upload customer document
  */
-  async uploadDocument(customerId: string, file: Express.Multer.File) {
+ async uploadDocument(customerId: string, file: Express.Multer.File) {
   const customer = await prisma.customer.findUnique({
     where: { id: customerId },
   });
@@ -389,7 +375,8 @@ export class CustomerService {
 
   // Update customer with new document path
   const relativePath = file.path.replace(/\\/g, '/');
-  const updated = await prisma.customer.update({
+  // Fix: Remove unused 'updated' variable
+  await prisma.customer.update({
     where: { id: customerId },
     data: { 
       documentPath: `/${relativePath}`,
@@ -398,9 +385,12 @@ export class CustomerService {
   });
 
   logger.info(`Document uploaded for customer: ${customer.email}`);
-  return updated;
-  }
-
+  
+  // Return the customer with updated document info
+  return await prisma.customer.findUnique({
+    where: { id: customerId },
+  });
+}
 /**
  * Delete customer document
  */
@@ -469,37 +459,5 @@ export class CustomerService {
     name: customer.documentName || 'document',
   };
   }
-  /**
-   * Upload customer avatar
-   */
-  async uploadAvatar(customerId: string, file: Express.Multer.File) {
-    const customer = await prisma.customer.findUnique({
-      where: { id: customerId },
-    });
-
-    if (!customer) {
-      throw new AppError(404, 'Customer not found');
-    }
-
-    // Delete old avatar if exists
-    if (customer.avatar) {
-      try {
-        const oldAvatarPath = path.join(process.cwd(), customer.avatar);
-        await fs.unlink(oldAvatarPath);
-      } catch (error) {
-        logger.warn(`Failed to delete old avatar:`, error);
-        // Continue with new avatar upload even if old deletion fails
-      }
-    }
-
-    // Update customer with new avatar path
-    const relativePath = file.path.replace(/\\/g, '/');
-    const updated = await prisma.customer.update({
-      where: { id: customerId },
-      data: { avatar: `/${relativePath}` },
-    });
-
-    logger.info(`Avatar uploaded for customer: ${customer.email}`);
-    return updated;
-  }
+  
 }
