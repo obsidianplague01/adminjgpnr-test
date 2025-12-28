@@ -23,6 +23,7 @@ export class CacheService {
 
   private async checkRedisHealth() {
     try {
+      const redis = (await import('../config/cache')).default;
       await redis.ping();
       if (!this.isRedisHealthy) {
         logger.info('Redis connection restored');

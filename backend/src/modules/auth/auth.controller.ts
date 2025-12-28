@@ -1,11 +1,12 @@
 // src/modules/auth/auth.controller.ts
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { AuthService, LoginResponse } from './auth.service';
+import { AuthService, JWTPayload} from './auth.service';
 import { asyncHandler } from '../../middleware/errorHandler';
 import { blacklistToken } from '../../middleware/auth';
 import { monitoring } from '../../utils/monitoring.service';
 import { secureLogger as logger } from '../../utils/secure-logger';
+import prisma from '../../config/database';
 const authService = new AuthService();
 
 export const login = asyncHandler(async (req: Request, res: Response) => {

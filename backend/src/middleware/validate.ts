@@ -1,6 +1,7 @@
 // COMPREHENSIVE SANITIZATION
 import DOMPurify from 'isomorphic-dompurify';
-import validator from 'validator';
+import { Request, Response, NextFunction } from 'express';
+import { logger } from '../utils/logger';
 
 export const sanitizeString = (str: string): string => {
   if (typeof str !== 'string') return str;

@@ -4,6 +4,7 @@ import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import prisma from '../../config/database';
 import { UserRole, Prisma } from '@prisma/client';
+import redis from '../../config/cache';
 
 export class PaymentService {
   private readonly paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';

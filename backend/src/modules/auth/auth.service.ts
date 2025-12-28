@@ -6,10 +6,10 @@ import { LoginInput, CreateUserInput, UpdateUserInput, ChangePasswordInput } fro
 import { JWTPayload } from '../../middleware/auth';
 import { Prisma, UserRole } from '@prisma/client';
 import { logger } from '../../utils/logger';
-import jwt, { SignOptions } from 'jsonwebtoken';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import crypto from 'crypto';
+import jwt, { SignOptions } from 'jsonwebtoken';
 
 const getSaltRounds = (): number => {
   const envRounds = parseInt(process.env.BCRYPT_ROUNDS || '14');
@@ -70,7 +70,7 @@ export class AuthService {
     }
 
     await accountLockout(data.email, true);
-    
+
     await prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },

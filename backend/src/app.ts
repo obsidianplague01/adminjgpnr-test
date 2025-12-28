@@ -15,7 +15,6 @@ import {
 import { authenticate , authorizeFileAccess } from './middleware/auth';
 import { logger } from './utils/logger';
 import { initializeSentry, getSentryMiddleware } from './config/monitoring';
-import path from 'path';
 import { csrfProtection, getCsrfToken, csrfErrorHandler } from './middleware/csrf';
 import cookieParser from 'cookie-parser';
 
@@ -137,9 +136,21 @@ app.use('/api/payments/webhook', express.json({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(sanitizeInput);
-app.use('/uploads/qrcodes', authenticate, express.static(path.join(__dirname, '../uploads/qrcodes')));
+app.use('/uploads/qrcodes', 
+  authenticate, 
+  authorizeFileAccess, 
+  fileDownloadLimiter, 
+  express.static(path.join(__dirname, '../uploads/qrcodes'))
+);
+
+app.use('/uploads/documents', 
+  authenticate, 
+  authorizeFileAccess, 
+  fileDownloadLimiter, 
+  express.static(path.join(__dirname, '../uploads/documents'))
+);
 app.use('/uploads/avatars', authenticate, express.static(path.join(__dirname, '../uploads/avatars')));
-app.use('/uploads/documents', authenticate, express.static(path.join(__dirname, '../uploads/documents')));
+
 
 if (process.env.TRUST_PROXY === 'true') {
   app.set('trust proxy', 1);

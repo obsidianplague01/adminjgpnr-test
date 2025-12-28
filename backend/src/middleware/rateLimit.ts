@@ -5,6 +5,7 @@ import RedisStore from 'rate-limit-redis';
 import { createClient } from 'redis';
 import { Request, Response } from 'express';
 import { logger } from '../utils/logger';
+import redis from '../config/cache';
 
 const redisClient = createClient({
   url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,

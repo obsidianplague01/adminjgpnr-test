@@ -5,6 +5,8 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { Request } from 'express';
 import { fileTypeFromBuffer } from 'file-type';
+import { logger } from '../utils/logger';
+import { promises as fsPromises } from 'fs';
 
 
 const ALLOWED_EXTENSIONS = [
@@ -62,27 +64,27 @@ const fileFilter = async (
   cb: multer.FileFilterCallback
 ) => {
   try {
-    // ✅ 1. Check file extension
+   
     const ext = path.extname(file.originalname).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       return cb(new Error(`File extension ${ext} not allowed`));
     }
 
-    // ✅ 2. Check MIME type
+    
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
       return cb(new Error(`MIME type ${file.mimetype} not allowed`));
     }
 
-    // ✅ 3. Validate filename (prevent path traversal)
+    
     const basename = path.basename(file.originalname);
     if (basename !== file.originalname) {
       return cb(new Error('Invalid filename: path traversal detected'));
     }
 
-    // ✅ 4. Check for double extensions
+    
     const nameParts = file.originalname.split('.');
     if (nameParts.length > 2) {
-      // Allow only one extension (name.ext, not name.php.png)
+     
       return cb(new Error('Multiple file extensions not allowed'));
     }
 
@@ -104,13 +106,13 @@ export const upload = multer({
 
 export const validateUploadedFile = async (filepath: string): Promise<boolean> => {
   try {
-    const buffer = await fs.readFile(filepath);
+    const buffer = await fsPromises.readFile(filepath);
 
     const fileType = await fileTypeFromBuffer(buffer);
 
     if (!fileType) {
       logger.warn('Could not determine file type from magic bytes', { filepath });
-      await fs.unlink(filepath);  
+      await fsPromises.unlink(filepath);  
       return false;
     }
 
@@ -121,7 +123,7 @@ export const validateUploadedFile = async (filepath: string): Promise<boolean> =
         claimedType: path.extname(filepath),
         actualType: fileType.ext,
       });
-      await fs.unlink(filepath);
+      await fsPromises.unlink(filepath);
       return false;
     }
 
