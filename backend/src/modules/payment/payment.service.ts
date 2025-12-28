@@ -181,7 +181,7 @@ export class PaymentService {
   }
 
   
-  async handleWebhook(payload: any, signature: string) {
+  async handleWebhook(payload: any, signature: string, req?: Request) {
     
     if (!signature) {
       logger.warn('Webhook received without signature', { ip: req?.ip });

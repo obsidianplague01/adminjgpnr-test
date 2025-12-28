@@ -32,9 +32,19 @@ import advancedSettingsRoutes from './modules/settings/advancedSettings.routes';
 import batchRoutes from './modules/batch/batch.routes';
 import monitoringRoutes from './modules/monitoring/monitoring.routes';
 import paymentRoutes from './modules/payment/payment.routes';
-
+import auditRoutes from './modules/audit/audit.routes';
 const app = express();
+const API_VERSION = 'v1';
 
+app.use(`/api/${API_VERSION}/auth`, authRoutes);
+app.use(`/api/${API_VERSION}/orders`, authenticate, orderRoutes);
+app.use(`/api/${API_VERSION}/customers`, authenticate, customerRoutes);
+app.use(`/api/${API_VERSION}/tickets`, authenticate, ticketRoutes);
+app.use(`/api/${API_VERSION}/payments`, authenticate, paymentRoutes);
+app.use(`/api/${API_VERSION}/analytics`, authenticate, analyticsRoutes);
+app.use(`/api/${API_VERSION}/users`, authenticate, userRoutes);
+app.use(`/api/${API_VERSION}/settings`, authenticate, settingsRoutes);
+app.use(`/api/${API_VERSION}/audit`, authenticate, auditRoutes); 
 initializeSentry(app);
 const sentryMiddleware = getSentryMiddleware();
 app.use(sentryMiddleware.requestHandler);

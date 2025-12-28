@@ -3,7 +3,7 @@ import { TicketStatus } from '@prisma/client';
 import prisma from '../../config/database';
 import { monitoring } from '../../utils/monitoring.service';
 import { AppError } from '../../middleware/errorHandler';
-import { AuditLogger, AuditAction, AuditEntity } from '../../utils/audit';
+import { AuditLogger, AuditAction, AuditEntity, AuditContext } from '../../utils/audit';
 import crypto from 'crypto';
 import {
   CreateTicketInput,
@@ -21,9 +21,10 @@ import {
   isTicketExpired,
 } from '../../utils/ticket.utils';
 import { logger } from '../../utils/logger';
+
 function generateSecureCode(length: number, charset: string): string {
   const result: string[] = [];
-  const randomBytes = crypto.randomBytes(length * 2); // Extra bytes for safety
+  const randomBytes = crypto.randomBytes(length * 2);
   
   let cursor = 0;
   while (result.length < length && cursor < randomBytes.length) {
@@ -36,8 +37,12 @@ function generateSecureCode(length: number, charset: string): string {
   
   return result.join('');
 }
+
 export class TicketService {
-  async createTickets(data: CreateTicketInput) {
+  /**
+   * Create tickets
+   */
+  async createTickets(data: CreateTicketInput, context: AuditContext) {
     const order = await prisma.order.findUnique({
       where: { id: data.orderId },
       include: { customer: true },
@@ -89,10 +94,34 @@ export class TicketService {
       tickets.push(ticket);
     }
 
-    logger.info(`Created ${quantity} tickets for order ${data.orderId}`);
+    // ✅ Audit bulk ticket creation
+    await AuditLogger.logBulkOperation(
+      AuditEntity.TICKET,
+      'TICKETS_CREATED',
+      quantity,
+      context,
+      {
+        orderId: data.orderId,
+        orderNumber: order.orderNumber,
+        customerEmail: order.customer.email,
+        ticketCodes: tickets.map(t => t.ticketCode),
+        gameSession: data.gameSession,
+        validityDays: data.validityDays || settings.validityDays,
+      }
+    );
+
+    logger.info(`Created ${quantity} tickets for order ${data.orderId}`, {
+      orderId: data.orderId,
+      quantity,
+      createdBy: context.userId,
+    });
+
     return tickets;
   }
 
+  /**
+   * List tickets with filters
+   */
   async listTickets(filters: ListTicketsInput) {
     const page = filters.page || 1;
     const limit = Math.min(filters.limit || 20, 100);
@@ -139,6 +168,9 @@ export class TicketService {
     };
   }
 
+  /**
+   * Get ticket by ID
+   */
   async getTicket(ticketId: string) {
     const ticket = await prisma.ticket.findUnique({
       where: { id: ticketId },
@@ -162,6 +194,9 @@ export class TicketService {
     return ticket;
   }
 
+  /**
+   * Get ticket by code
+   */
   async getTicketByCode(ticketCode: string) {
     const ticket = await prisma.ticket.findUnique({
       where: { ticketCode },
@@ -184,16 +219,63 @@ export class TicketService {
     return ticket;
   }
 
-  async updateTicket(ticketId: string, data: UpdateTicketInput) {
+  /**
+   * Update ticket
+   */
+  async updateTicket(ticketId: string, data: UpdateTicketInput, context: AuditContext) {
+    const existing = await prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        order: { include: { customer: true } },
+      },
+    });
+
+    if (!existing) {
+      throw new AppError(404, 'Ticket not found');
+    }
+
     const ticket = await prisma.ticket.update({
       where: { id: ticketId },
       data,
     });
 
-    logger.info(`Ticket updated: ${ticket.ticketCode}`);
+    // ✅ Track changes
+    const changes: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (existing[key as keyof typeof existing] !== value) {
+        changes[key] = {
+          from: existing[key as keyof typeof existing],
+          to: value,
+        };
+      }
+    }
+
+    // ✅ Audit log
+    await AuditLogger.log({
+      action: AuditAction.TICKET_CREATED, // Reusing action
+      entity: AuditEntity.TICKET,
+      entityId: ticketId,
+      details: {
+        ticketCode: ticket.ticketCode,
+        action: 'TICKET_UPDATED',
+        customerEmail: existing.order.customer.email,
+        changes,
+      },
+      context,
+    });
+
+    logger.info(`Ticket updated: ${ticket.ticketCode}`, {
+      ticketId,
+      updatedBy: context.userId,
+      changedFields: Object.keys(changes),
+    });
+
     return ticket;
   }
 
+  /**
+   * Cancel ticket
+   */
   async cancelTicket(id: string, reason: string, context: AuditContext) {
     const ticket = await prisma.ticket.findUnique({
       where: { id },
@@ -224,6 +306,7 @@ export class TicketService {
       details: {
         ticketCode: ticket.ticketCode,
         orderId: ticket.orderId,
+        orderNumber: ticket.order.orderNumber,
         customerEmail: ticket.order.customer.email,
         reason,
         previousStatus: ticket.status,
@@ -231,9 +314,19 @@ export class TicketService {
       context,
     });
 
+    logger.info('Ticket cancelled', {
+      ticketId: id,
+      ticketCode: ticket.ticketCode,
+      cancelledBy: context.userId,
+      reason,
+    });
+
     return updated;
   }
 
+  /**
+   * Validate ticket
+   */
   async validateTicket(data: ValidateTicketInput) {
     const ticket = await prisma.ticket.findUnique({
       where: { ticketCode: data.ticketCode },
@@ -313,7 +406,10 @@ export class TicketService {
     };
   }
 
-  async scanTicket(data: ScanTicketInput) {
+  /**
+   * Scan ticket
+   */
+  async scanTicket(data: ScanTicketInput, context: AuditContext) {
     const start = Date.now();
     
     monitoring.addBreadcrumb('Ticket scanned', {
@@ -323,6 +419,14 @@ export class TicketService {
     try {
       const validation = await this.validateTicket({
         ticketCode: data.ticketCode,
+      });
+
+      // Get full ticket data for audit
+      const ticket = await prisma.ticket.findUnique({
+        where: { ticketCode: data.ticketCode },
+        include: {
+          order: { include: { customer: true } },
+        },
       });
 
       const scanRecord = await prisma.ticketScan.create({
@@ -354,9 +458,52 @@ export class TicketService {
           data: updateData,
         });
 
-        logger.info(`Ticket scanned: ${data.ticketCode} by ${data.scannedBy}`);
+        // ✅ Audit successful scan
+        await AuditLogger.log({
+          action: AuditAction.TICKET_SCANNED,
+          entity: AuditEntity.TICKET,
+          entityId: validation.ticket!.id,
+          details: {
+            ticketCode: data.ticketCode,
+            scanCount: validation.ticket!.scanCount + 1,
+            maxScans: validation.ticket!.maxScans,
+            location: data.location,
+            orderId: ticket?.orderId,
+            orderNumber: ticket?.order.orderNumber,
+            customerEmail: ticket?.order.customer.email,
+          },
+          context,
+        });
+
+        logger.info(`Ticket scanned: ${data.ticketCode}`, {
+          ticketCode: data.ticketCode,
+          scannedBy: data.scannedBy,
+          scanCount: validation.ticket!.scanCount + 1,
+        });
       } else {
-        logger.warn(`Scan denied: ${data.ticketCode} - ${validation.reason}`);
+        // ✅ Audit rejected scan
+        await AuditLogger.log({
+          action: AuditAction.TICKET_SCAN_REJECTED,
+          entity: AuditEntity.TICKET,
+          entityId: validation.ticket?.id,
+          details: {
+            ticketCode: data.ticketCode,
+            reason: validation.reason,
+            location: data.location,
+            orderId: ticket?.orderId,
+            orderNumber: ticket?.order.orderNumber,
+            customerEmail: ticket?.order.customer.email,
+          },
+          context,
+          success: false,
+          errorMessage: validation.reason,
+        });
+
+        logger.warn(`Scan denied: ${data.ticketCode} - ${validation.reason}`, {
+          ticketCode: data.ticketCode,
+          scannedBy: data.scannedBy,
+          reason: validation.reason,
+        });
       }
 
       monitoring.trackPerformance('scanTicket', Date.now() - start);
@@ -375,15 +522,18 @@ export class TicketService {
     }
   }
 
-  async getScanHistory(_filters: { ticketId?: string; limit?: number }) {
+  /**
+   * Get scan history
+   */
+  async getScanHistory(filters: { ticketId?: string; limit?: number }) {
     const where: any = {};
-    if (_filters.ticketId) {
-      where.ticketId = _filters.ticketId;
+    if (filters.ticketId) {
+      where.ticketId = filters.ticketId;
     }
 
     const scans = await prisma.ticketScan.findMany({
       where,
-      take: _filters.limit || 100,
+      take: filters.limit || 100,
       orderBy: { scannedAt: 'desc' },
       include: {
         ticket: {
@@ -398,6 +548,9 @@ export class TicketService {
     return scans;
   }
 
+  /**
+   * Get ticket statistics
+   */
   async getTicketStats() {
     const [total, active, scanned, cancelled, expired] = await Promise.all([
       prisma.ticket.count(),
@@ -419,6 +572,9 @@ export class TicketService {
     };
   }
 
+  /**
+   * Get ticket settings
+   */
   async getSettings() {
     let settings = await prisma.ticketSettings.findUnique({
       where: { id: 1 },
@@ -439,7 +595,12 @@ export class TicketService {
     return settings;
   }
 
-  async updateSettings(data: UpdateSettingsInput) {
+  /**
+   * Update ticket settings
+   */
+  async updateSettings(data: UpdateSettingsInput, context: AuditContext) {
+    const existing = await this.getSettings();
+
     const settings = await prisma.ticketSettings.upsert({
       where: { id: 1 },
       update: data,
@@ -449,7 +610,34 @@ export class TicketService {
       },
     });
 
-    logger.info('Ticket settings updated');
+    // ✅ Track changes
+    const changes: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (existing[key as keyof typeof existing] !== value) {
+        changes[key] = {
+          from: existing[key as keyof typeof existing],
+          to: value,
+        };
+      }
+    }
+
+    // ✅ Audit log
+    await AuditLogger.log({
+      action: AuditAction.SETTINGS_CHANGED,
+      entity: AuditEntity.SETTINGS,
+      entityId: '1',
+      details: {
+        settingsType: 'TICKET_SETTINGS',
+        changes,
+      },
+      context,
+    });
+
+    logger.info('Ticket settings updated', {
+      updatedBy: context.userId,
+      changedFields: Object.keys(changes),
+    });
+
     return settings;
   }
 }

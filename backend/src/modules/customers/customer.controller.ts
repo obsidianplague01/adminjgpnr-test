@@ -1,3 +1,4 @@
+//src/modules/customers/customer.controller.ts
 import { Request, Response } from 'express';
 import { CustomerService } from './customer.service';
 import { asyncHandler } from '../../middleware/errorHandler';
@@ -88,3 +89,4 @@ export const downloadDocument = asyncHandler(async (req: Request, res: Response)
   
   res.download(document.path, document.name || 'document');
 });
+

@@ -50,7 +50,7 @@ model User {
   tokenVersion  Int      @default(0)
   isActive      Boolean  @default(true)
   lastLoginAt   DateTime?
-  
+  auditLogs    AuditLog[]
   twoFactorEnabled      Boolean @default(false)
   twoFactorSecret       String?
   twoFactorBackupCodes  String?
@@ -67,7 +67,29 @@ model User {
   @@index([role, isActive])
   @@map("users")
 }
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  action       String
+  entity       String
+  entityId     String?
+  details      Json     @default("{}")
+  ipAddress    String?
+  userAgent    String?
+  success      Boolean  @default(true)
+  errorMessage String?
+  createdAt    DateTime @default(now())
 
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([createdAt])
+  @@index([success])
+  @@map("audit_logs")
+}
 model Customer {
   id            String   @id @default(cuid())
   firstName     String
