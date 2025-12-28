@@ -1,5 +1,5 @@
 // src/modules/orders/order.service.ts
-import { OrderStatus, Prisma } from '@prisma/client';
+import { OrderStatus, Prisma, UserRole } from '@prisma/client';
 import prisma from '../../config/database';
 import { AppError } from '../../middleware/errorHandler';
 import { monitoring } from '../../utils/monitoring.service';
@@ -18,20 +18,22 @@ const ticketService = new TicketService();
 
 export class OrderService {
   /**
-   * Generate unique order number: ORD-YYYYMMDD-XXXX
+   * Generate unique order number - FIXED: More collision-resistant format
    */
   private generateOrderNumber(): string {
     const date = new Date();
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
-    const random = Math.floor(1000 + Math.random() * 9000);
+    const time = Date.now().toString().slice(-6); // Last 6 digits of timestamp
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     
-    return `ORD-${year}${month}${day}-${random}`;
+    // Format: ORD-YYYYMMDD-TTTTTTRRR (timestamp + random = unique)
+    return `ORD-${year}${month}${day}-${time}${random}`;
   }
   
   /**
-   * Create new order with tickets
+   * Create new order with tickets - FIXED: Race condition in order number generation
    */
   async createOrder(data: CreateOrderInput) {
     const start = Date.now();
@@ -50,28 +52,33 @@ export class OrderService {
         throw new AppError(404, 'Customer not found');
       }
       
-      // Generate unique order number
-      let orderNumber = this.generateOrderNumber();
-      let attempts = 0;
-      
-      // Ensure uniqueness
-      while (attempts < 5) {
-        const existing = await prisma.order.findUnique({
-          where: { orderNumber },
-        });
-        
-        if (!existing) break;
-        
-        orderNumber = this.generateOrderNumber();
-        attempts++;
-      }
-
-      if (attempts === 5) {
-        throw new AppError(500, 'Failed to generate unique order number');
-      }
-
-      // Create order in transaction
+      // FIXED: Moved order number generation inside transaction to prevent race conditions
       const order = await prisma.$transaction(async (tx) => {
+        // Generate unique order number with retry logic inside transaction
+        let orderNumber: string;
+        let attempts = 0;
+        const maxAttempts = 5;
+        
+        do {
+          orderNumber = this.generateOrderNumber();
+          
+          const existing = await tx.order.findUnique({
+            where: { orderNumber },
+          });
+          
+          if (!existing) break;
+          
+          attempts++;
+          
+          // Add small delay to reduce collision probability
+          await new Promise(resolve => setTimeout(resolve, 10));
+          
+        } while (attempts < maxAttempts);
+
+        if (attempts === maxAttempts) {
+          throw new AppError(500, 'Failed to generate unique order number');
+        }
+
         // Create order
         const newOrder = await tx.order.create({
           data: {
@@ -285,7 +292,7 @@ export class OrderService {
   }
 
   /**
-   * Confirm payment and activate tickets
+   * Confirm payment and activate tickets - FIXED: Notification user ID
    */
   async confirmPayment(orderId: string, data: ConfirmPaymentInput) {
     const order = await prisma.order.findUnique({
@@ -343,17 +350,28 @@ export class OrderService {
         }
       }
 
-      return updated;
-    });
+      // FIXED: Send notification to admins, not customers
+      const admins = await tx.user.findMany({
+        where: {
+          role: { in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
+          isActive: true,
+        },
+        select: { id: true },
+      });
 
-    // Create notification for admin
-    await prisma.notification.create({
-      data: {
-        userId: order.customer.id, // This should be admin ID
-        title: 'Payment Confirmed',
-        message: `Payment confirmed for order ${order.orderNumber}`,
-        type: 'SUCCESS',
-      },
+      // Create notifications for all admins
+      for (const admin of admins) {
+        await tx.notification.create({
+          data: {
+            userId: admin.id,
+            title: 'Payment Confirmed',
+            message: `Payment confirmed for order ${order.orderNumber} from ${order.customer.firstName} ${order.customer.lastName}`,
+            type: 'SUCCESS',
+          },
+        });
+      }
+
+      return updated;
     });
 
     // Queue receipt email
@@ -450,6 +468,7 @@ export class OrderService {
   }
 
   private async generateQRForTicket(ticket: any, _order: any): Promise<string> {
+    
     return `/qrcodes/${ticket.ticketCode}.png`;
   }
 }

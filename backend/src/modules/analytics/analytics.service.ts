@@ -2,7 +2,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../config/database';
 import { AppError } from '../../middleware/errorHandler';
-import { logger } from '../../utils/logger';
+import { Parser } from 'json2csv';
 
 /**
  * Validate and parse date input
@@ -347,88 +347,333 @@ export class AnalyticsService {
       bySession: ticketsBySession,
     };
   }
+  async getRevenueMetrics(startDate?: string, endDate?: string) {
+  const start = validateDate(startDate, 'startDate');
+  const end = validateDate(endDate, 'endDate');
+  
+  validateDateRange(start, end);
 
-  /**
-   * Export analytics data
-   */
-  async exportData(type: 'orders' | 'tickets' | 'customers' | 'scans', startDate?: string, endDate?: string) {
-    const start = validateDate(startDate, 'startDate');
-    const end = validateDate(endDate, 'endDate');
-    
-    validateDateRange(start, end);
-
-    if (!['orders', 'tickets', 'customers', 'scans'].includes(type)) {
-      throw new AppError(400, 'Invalid export type. Must be: orders, tickets, customers, or scans');
-    }
-
-    const where: any = {};
-    const dateField = type === 'scans' ? 'scannedAt' : type === 'orders' ? 'purchaseDate' : 'createdAt';
-
-    if (start || end) {
-      where[dateField] = {};
-      if (start) where[dateField].gte = start;
-      if (end) where[dateField].lte = end;
-    }
-
-    let data: any[];
-
-    switch (type) {
-      case 'orders':
-        data = await prisma.order.findMany({
-          where,
-          include: {
-            customer: {
-              select: { firstName: true, lastName: true, email: true },
-            },
-            tickets: {
-              select: { ticketCode: true, status: true },
-            },
-          },
-        });
-        break;
-
-      case 'tickets':
-        data = await prisma.ticket.findMany({
-          where,
-          include: {
-            order: {
-              include: {
-                customer: {
-                  select: { firstName: true, lastName: true, email: true },
-                },
-              },
-            },
-          },
-        });
-        break;
-
-      case 'customers':
-        data = await prisma.customer.findMany({
-          where,
-          include: {
-            _count: {
-              select: { orders: true },
-            },
-          },
-        });
-        break;
-
-      case 'scans':
-        data = await prisma.ticketScan.findMany({
-          where,
-          include: {
-            ticket: {
-              select: { ticketCode: true, gameSession: true },
-            },
-          },
-        });
-        break;
-
-      default:
-        throw new AppError(400, 'Invalid export type');
-    }
-
-    logger.info(`Exported ${data.length} ${type} records`);
-    return data;
+  const dateFilter: Prisma.OrderWhereInput = { status: 'COMPLETED' };
+  if (start || end) {
+    dateFilter.purchaseDate = {};
+    if (start) dateFilter.purchaseDate.gte = start;
+    if (end) dateFilter.purchaseDate.lte = end;
   }
+
+  const [totalRevenue, orderCount, avgOrderValue] = await Promise.all([
+    prisma.order.aggregate({
+      where: dateFilter,
+      _sum: { amount: true },
+    }),
+    prisma.order.count({ where: dateFilter }),
+    prisma.order.aggregate({
+      where: dateFilter,
+      _avg: { amount: true },
+    }),
+  ]);
+
+  return {
+    totalRevenue: Number(totalRevenue._sum.amount) || 0,
+    orderCount,
+    avgOrderValue: Number(avgOrderValue._avg.amount) || 0,
+  };
+}
+
+async getTicketStats(startDate?: string, endDate?: string) {
+  const start = validateDate(startDate, 'startDate');
+  const end = validateDate(endDate, 'endDate');
+  
+  validateDateRange(start, end);
+
+  const dateFilter: Prisma.TicketWhereInput = {};
+  if (start || end) {
+    dateFilter.createdAt = {};
+    if (start) dateFilter.createdAt.gte = start;
+    if (end) dateFilter.createdAt.lte = end;
+  }
+
+  const [total, statusBreakdown] = await Promise.all([
+    prisma.ticket.count({ where: dateFilter }),
+    prisma.ticket.groupBy({
+      by: ['status'],
+      where: dateFilter,
+      _count: true,
+    }),
+  ]);
+
+  return {
+    total,
+    statusBreakdown: statusBreakdown.reduce((acc, item) => {
+      acc[item.status.toLowerCase()] = item._count;
+      return acc;
+    }, {} as Record<string, number>),
+  };
+}
+
+async getCustomerStats(startDate?: string, endDate?: string) {
+  const start = validateDate(startDate, 'startDate');
+  const end = validateDate(endDate, 'endDate');
+  
+  validateDateRange(start, end);
+
+  const dateFilter: Prisma.CustomerWhereInput = {};
+  if (start || end) {
+    dateFilter.createdAt = {};
+    if (start) dateFilter.createdAt.gte = start;
+    if (end) dateFilter.createdAt.lte = end;
+  }
+
+  const [total, newCustomers, conversionRate] = await Promise.all([
+    prisma.customer.count(),
+    prisma.customer.count({ where: dateFilter }),
+    this.calculateConversionRate(start, end),
+  ]);
+
+  return {
+    total,
+    newCustomers,
+    conversionRate,
+  };
+}
+
+private async calculateConversionRate(start?: Date, end?: Date): Promise<number> {
+  const dateFilter: Prisma.CustomerWhereInput = {};
+  if (start || end) {
+    dateFilter.createdAt = {};
+    if (start) dateFilter.createdAt.gte = start;
+    if (end) dateFilter.createdAt.lte = end;
+  }
+
+  const [visitors, customers] = await Promise.all([
+    prisma.customer.count({ where: dateFilter }),
+    prisma.customer.count({ 
+      where: { 
+        ...dateFilter,
+        totalOrders: { gt: 0 },
+      } 
+    }),
+  ]);
+
+  return visitors > 0 ? parseFloat(((customers / visitors) * 100).toFixed(2)) : 0;
+}
+
+async getScanStats(startDate?: string, endDate?: string) {
+  const start = validateDate(startDate, 'startDate');
+  const end = validateDate(endDate, 'endDate');
+  
+  validateDateRange(start, end);
+
+  const dateFilter: Prisma.TicketScanWhereInput = {};
+  if (start || end) {
+    dateFilter.scannedAt = {};
+    if (start) dateFilter.scannedAt.gte = start;
+    if (end) dateFilter.scannedAt.lte = end;
+  }
+
+  const [totalScans, allowedScans, deniedScans] = await Promise.all([
+    prisma.ticketScan.count({ where: dateFilter }),
+    prisma.ticketScan.count({ where: { ...dateFilter, allowed: true } }),
+    prisma.ticketScan.count({ where: { ...dateFilter, allowed: false } }),
+  ]);
+
+  const successRate = totalScans > 0 
+    ? parseFloat(((allowedScans / totalScans) * 100).toFixed(2)) 
+    : 0;
+
+  return {
+    totalScans,
+    allowedScans,
+    deniedScans,
+    successRate,
+  };
+}
+
+async getCampaignStats() {
+  const [totalCampaigns, sentCampaigns, avgOpenRate, avgClickRate] = await Promise.all([
+    prisma.campaign.count(),
+    prisma.campaign.count({ where: { status: 'SENT' } }),
+    this.calculateAvgOpenRate(),
+    this.calculateAvgClickRate(),
+  ]);
+
+  return {
+    totalCampaigns,
+    sentCampaigns,
+    avgOpenRate,
+    avgClickRate,
+  };
+}
+
+private async calculateAvgOpenRate(): Promise<number> {
+  const campaigns = await prisma.campaign.findMany({
+    where: { status: 'SENT', sentTo: { gt: 0 } },
+    select: { sentTo: true, openedCount: true },
+  });
+
+  if (campaigns.length === 0) return 0;
+
+  const totalRate = campaigns.reduce((sum, c) => {
+    return sum + (c.openedCount / c.sentTo) * 100;
+  }, 0);
+
+  return parseFloat((totalRate / campaigns.length).toFixed(2));
+}
+
+private async calculateAvgClickRate(): Promise<number> {
+  const campaigns = await prisma.campaign.findMany({
+    where: { status: 'SENT', openedCount: { gt: 0 } },
+    select: { openedCount: true, clickedCount: true },
+  });
+
+  if (campaigns.length === 0) return 0;
+
+  const totalRate = campaigns.reduce((sum, c) => {
+    return sum + (c.clickedCount / c.openedCount) * 100;
+  }, 0);
+
+  return parseFloat((totalRate / campaigns.length).toFixed(2));
+}
+
+async exportData(
+  type: 'orders' | 'tickets' | 'customers' | 'scans', 
+  startDate?: string, 
+  endDate?: string
+): Promise<string> {
+  const start = validateDate(startDate, 'startDate');
+  const end = validateDate(endDate, 'endDate');
+  
+  validateDateRange(start, end);
+
+  let data: any[];
+
+  switch (type) {
+    case 'orders':
+      data = await this.exportOrdersData(start, end);
+      const orderParser = new Parser({
+        fields: ['orderNumber', 'customerEmail', 'amount', 'quantity', 'status', 'purchaseDate'],
+      });
+      return orderParser.parse(data);
+
+    case 'tickets':
+      data = await this.exportTicketsData(start, end);
+      const ticketParser = new Parser({
+        fields: ['ticketCode', 'orderNumber', 'gameSession', 'status', 'validUntil', 'scanCount'],
+      });
+      return ticketParser.parse(data);
+
+    case 'customers':
+      data = await this.exportCustomersData(start, end);
+      const customerParser = new Parser({
+        fields: ['firstName', 'lastName', 'email', 'phone', 'totalOrders', 'totalSpent', 'createdAt'],
+      });
+      return customerParser.parse(data);
+
+    case 'scans':
+      data = await this.exportScansData(start, end);
+      const scanParser = new Parser({
+        fields: ['ticketCode', 'scannedAt', 'scannedBy', 'location', 'allowed', 'reason'],
+      });
+      return scanParser.parse(data);
+
+    default:
+      throw new AppError(400, 'Invalid export type');
+  }
+}
+
+private async exportOrdersData(start?: Date, end?: Date) {
+  const where: Prisma.OrderWhereInput = {};
+  if (start || end) {
+    where.purchaseDate = {};
+    if (start) where.purchaseDate.gte = start;
+    if (end) where.purchaseDate.lte = end;
+  }
+
+  const orders = await prisma.order.findMany({
+    where,
+    include: {
+      customer: { select: { email: true } },
+    },
+  });
+
+  return orders.map(o => ({
+    orderNumber: o.orderNumber,
+    customerEmail: o.customer.email,
+    amount: Number(o.amount),
+    quantity: o.quantity,
+    status: o.status,
+    purchaseDate: o.purchaseDate.toISOString(),
+  }));
+}
+
+private async exportTicketsData(start?: Date, end?: Date) {
+  const where: Prisma.TicketWhereInput = {};
+  if (start || end) {
+    where.createdAt = {};
+    if (start) where.createdAt.gte = start;
+    if (end) where.createdAt.lte = end;
+  }
+
+  const tickets = await prisma.ticket.findMany({
+    where,
+    include: {
+      order: { select: { orderNumber: true } },
+    },
+  });
+
+  return tickets.map(t => ({
+    ticketCode: t.ticketCode,
+    orderNumber: t.order.orderNumber,
+    gameSession: t.gameSession,
+    status: t.status,
+    validUntil: t.validUntil.toISOString(),
+    scanCount: t.scanCount,
+  }));
+}
+
+private async exportCustomersData(start?: Date, end?: Date) {
+  const where: Prisma.CustomerWhereInput = {};
+  if (start || end) {
+    where.createdAt = {};
+    if (start) where.createdAt.gte = start;
+    if (end) where.createdAt.lte = end;
+  }
+
+  const customers = await prisma.customer.findMany({ where });
+
+  return customers.map(c => ({
+    firstName: c.firstName,
+    lastName: c.lastName,
+    email: c.email,
+    phone: c.phone,
+    totalOrders: c.totalOrders,
+    totalSpent: Number(c.totalSpent),
+    createdAt: c.createdAt.toISOString(),
+  }));
+}
+
+private async exportScansData(start?: Date, end?: Date) {
+  const where: Prisma.TicketScanWhereInput = {};
+  if (start || end) {
+    where.scannedAt = {};
+    if (start) where.scannedAt.gte = start;
+    if (end) where.scannedAt.lte = end;
+  }
+
+  const scans = await prisma.ticketScan.findMany({
+    where,
+    include: {
+      ticket: { select: { ticketCode: true } },
+    },
+  });
+
+  return scans.map(s => ({
+    ticketCode: s.ticket.ticketCode,
+    scannedAt: s.scannedAt.toISOString(),
+    scannedBy: s.scannedBy,
+    location: s.location || 'Unknown',
+    allowed: s.allowed,
+    reason: s.reason,
+  }));
+}
+
 }

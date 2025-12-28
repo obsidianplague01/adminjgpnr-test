@@ -6,6 +6,11 @@ import { logger } from '../utils/logger';
 const CACHE_TTL = 300; // 5 minutes default
 const MAX_KEY_LENGTH = 250;
 
+interface CacheOptions {
+  ttl?: number;
+  prefix?: string;
+}
+
 /**
  * Validate cache key
  */
@@ -30,8 +35,8 @@ const validateCacheKey = (key: string): boolean => {
 /**
  * Generate cache key from request
  */
-const generateCacheKey = (req: Request): string => {
-  const baseKey = `api:${req.path}`;
+const generateCacheKey = (req: Request, prefix?: string): string => {
+  const baseKey = prefix || `api:${req.path}`;
   
   // Include query parameters in key
   const queryKeys = Object.keys(req.query).sort();
@@ -46,16 +51,20 @@ const generateCacheKey = (req: Request): string => {
 };
 
 /**
- * Cache middleware
+ * Cache middleware - FIXED: Accept both number and options object
  */
-export const cache = (ttl: number = CACHE_TTL) => {
+export const cache = (options?: number | CacheOptions) => {
+  // Handle both old API (number) and new API (object)
+  const ttl = typeof options === 'number' ? options : (options?.ttl || CACHE_TTL);
+  const prefix = typeof options === 'object' ? options.prefix : undefined;
+
   return async (req: Request, res: Response, next: NextFunction) => {
     // Only cache GET requests
     if (req.method !== 'GET') {
       return next();
     }
 
-    const cacheKey = generateCacheKey(req);
+    const cacheKey = generateCacheKey(req, prefix);
 
     if (!validateCacheKey(cacheKey)) {
       logger.warn(`Invalid cache key generated: ${cacheKey.substring(0, 100)}`);
@@ -68,6 +77,8 @@ export const cache = (ttl: number = CACHE_TTL) => {
       if (cachedData) {
         logger.debug(`Cache hit: ${cacheKey}`);
         
+        res.setHeader('X-Cache', 'HIT');
+        
         return res.json({
           ...cachedData,
           _cached: true,
@@ -76,6 +87,7 @@ export const cache = (ttl: number = CACHE_TTL) => {
       }
 
       logger.debug(`Cache miss: ${cacheKey}`);
+      res.setHeader('X-Cache', 'MISS');
 
       // Store original json method
       const originalJson = res.json.bind(res);
@@ -111,7 +123,7 @@ export const invalidateCache = async (pattern: string): Promise<void> => {
   }
 
   try {
-    await cacheService.del(pattern);
+    await cacheService.deletePattern(pattern);
     logger.debug(`Cache invalidated: ${pattern}`);
   } catch (error) {
     logger.error(`Failed to invalidate cache ${pattern}:`, error);

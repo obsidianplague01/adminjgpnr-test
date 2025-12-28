@@ -17,10 +17,7 @@ interface AuthSocket extends Socket {
   user?: SocketUser;
 }
 
-/**
- * Initialize WebSocket server
- */
-export const initializeWebSocket = (server: HTTPServer) => {
+export const initializeWebSocket = async (server: HTTPServer): Promise<void> => {
   io = new Server(server, {
     cors: {
       origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -30,7 +27,6 @@ export const initializeWebSocket = (server: HTTPServer) => {
     pingInterval: 25000,
   });
 
-  // Authentication middleware
   io.use(async (socket: AuthSocket, next) => {
     try {
       const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
@@ -68,21 +64,17 @@ export const initializeWebSocket = (server: HTTPServer) => {
     }
   });
 
-  // Connection handler
   io.on('connection', (socket: AuthSocket) => {
     logger.info(`Client connected: ${socket.id} (User: ${socket.user?.email})`);
 
-    // Join user-specific room
     if (socket.user) {
       socket.join(`user:${socket.user.id}`);
       
-      // Join admin room if user is admin
-      if (socket.user.role === 'admin' || socket.user.role === 'superadmin') {
+      if (socket.user.role === 'ADMIN' || socket.user.role === 'SUPER_ADMIN') {
         socket.join('admins');
       }
     }
 
-    // Handle ticket scan events
     socket.on('scan:ticket', async (data) => {
       try {
         if (!socket.user) {
@@ -92,7 +84,6 @@ export const initializeWebSocket = (server: HTTPServer) => {
 
         logger.info(`Ticket scan event from ${socket.user.email}:`, data);
         
-        // Emit to admins room
         io.to('admins').emit('scan:new', {
           ticketCode: data.ticketCode,
           scannedBy: socket.user.email,
@@ -104,7 +95,6 @@ export const initializeWebSocket = (server: HTTPServer) => {
       }
     });
 
-    // Handle order updates
     socket.on('order:update', async (data) => {
       try {
         if (!socket.user) {
@@ -114,8 +104,9 @@ export const initializeWebSocket = (server: HTTPServer) => {
 
         logger.info(`Order update event from ${socket.user.email}:`, data);
         
-        // Emit to specific user and admins
-        io.to(`user:${data.customerId}`).emit('order:updated', data);
+        if (data.customerId) {
+          io.to(`user:${data.customerId}`).emit('order:updated', data);
+        }
         io.to('admins').emit('order:updated', data);
       } catch (error: any) {
         logger.error('Order update event error:', error);
@@ -123,7 +114,6 @@ export const initializeWebSocket = (server: HTTPServer) => {
       }
     });
 
-    // Handle analytics requests
     socket.on('analytics:subscribe', async () => {
       try {
         if (!socket.user) {
@@ -131,8 +121,7 @@ export const initializeWebSocket = (server: HTTPServer) => {
           return;
         }
 
-        // Only allow admin users
-        if (socket.user.role !== 'admin' && socket.user.role !== 'superadmin') {
+        if (socket.user.role !== 'ADMIN' && socket.user.role !== 'SUPER_ADMIN') {
           socket.emit('error', { message: 'Insufficient permissions' });
           return;
         }
@@ -145,12 +134,10 @@ export const initializeWebSocket = (server: HTTPServer) => {
       }
     });
 
-    // Handle disconnection
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${socket.id} (Reason: ${reason})`);
     });
 
-    // Handle errors
     socket.on('error', (error) => {
       logger.error('Socket error:', error);
     });
@@ -159,9 +146,6 @@ export const initializeWebSocket = (server: HTTPServer) => {
   logger.info('WebSocket server initialized');
 };
 
-/**
- * Get Socket.IO instance
- */
 export const getIO = (): Server => {
   if (!io) {
     throw new Error('WebSocket not initialized');
@@ -169,10 +153,7 @@ export const getIO = (): Server => {
   return io;
 };
 
-/**
- * Emit event to specific user
- */
-export const emitToUser = (userId: string, event: string, data: any) => {
+export const emitToUser = (userId: string, event: string, data: any): void => {
   try {
     if (!io) {
       logger.warn('WebSocket not initialized, cannot emit to user');
@@ -184,10 +165,7 @@ export const emitToUser = (userId: string, event: string, data: any) => {
   }
 };
 
-/**
- * Emit event to all admin users
- */
-export const emitToAdmins = (event: string, data: any) => {
+export const emitToAdmins = (event: string, data: any): void => {
   try {
     if (!io) {
       logger.warn('WebSocket not initialized, cannot emit to admins');
@@ -199,10 +177,7 @@ export const emitToAdmins = (event: string, data: any) => {
   }
 };
 
-/**
- * Emit event to all connected clients
- */
-export const emitToAll = (event: string, data: any) => {
+export const emitToAll = (event: string, data: any): void => {
   try {
     if (!io) {
       logger.warn('WebSocket not initialized, cannot emit to all');
@@ -211,5 +186,36 @@ export const emitToAll = (event: string, data: any) => {
     io.emit(event, data);
   } catch (error) {
     logger.error('Error emitting to all:', error);
+  }
+};
+
+export const emitNotification = (userId: string, notification: any): void => {
+  emitToUser(userId, 'notification:new', notification);
+};
+
+export const getConnectionStats = async (): Promise<{
+  totalConnections: number;
+  adminConnections: number;
+  rooms: string[];
+}> => {
+  if (!io) {
+    return { totalConnections: 0, adminConnections: 0, rooms: [] };
+  }
+
+  const sockets = await io.fetchSockets();
+  const adminSockets = sockets.filter(s => s.rooms.has('admins'));
+  const rooms = Array.from(io.sockets.adapter.rooms.keys());
+
+  return {
+    totalConnections: sockets.length,
+    adminConnections: adminSockets.length,
+    rooms,
+  };
+};
+
+export const closeWebSocket = async (): Promise<void> => {
+  if (io) {
+    io.close();
+    logger.info('WebSocket server closed');
   }
 };

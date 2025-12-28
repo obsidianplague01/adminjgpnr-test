@@ -194,44 +194,75 @@ export class CacheService {
   /**
    * Delete by pattern
    */
-  async deletePattern(pattern: string): Promise<number> {
-    try {
-      let deletedCount = 0;
+  // backend/src/utils/cache.service.ts (Line ~220)
 
-      // Delete from Redis
-      if (this.isRedisHealthy) {
-        try {
-          const keys = await redis.keys(pattern);
-          if (keys.length > 0) {
-            await redis.del(...keys);
-            deletedCount = keys.length;
-            logger.info(`Invalidated ${keys.length} Redis keys matching: ${pattern}`);
-          }
-        } catch (error) {
-          logger.error('Redis pattern delete error:', error);
+    async deletePattern(pattern: string): Promise<number> {
+  try {
+    let deletedCount = 0;
+
+    // Delete from Redis
+    if (this.isRedisHealthy) {
+      try {
+        const keys = await redis.keys(pattern);
+        if (keys.length > 0) {
+          await redis.del(...keys);
+          deletedCount = keys.length;
+          logger.info(`Invalidated ${keys.length} Redis keys matching: ${pattern}`);
         }
+      } catch (error) {
+        logger.error('Redis pattern delete error:', error);
       }
-
-      // Clean DB cache
-      if (pattern.startsWith('analytics:')) {
-        try {
-          const likePattern = pattern.replace('*', '%');
-          const result = await prisma.$executeRawUnsafe(
-            `DELETE FROM "AnalyticsCache" WHERE "cacheKey" LIKE $1`,
-            likePattern
-          );
-          logger.info(`Deleted ${result} DB cache entries matching: ${pattern}`);
-        } catch (error) {
-          logger.error('DB pattern delete error:', error);
-        }
-      }
-
-      return deletedCount;
-    } catch (error) {
-      logger.error('Cache pattern delete error:', error);
-      return 0;
     }
+
+    // Clean DB cache - FIXED: Use proper parameterized query
+    if (pattern.startsWith('analytics:')) {
+      try {
+        const likePattern = pattern.replace('*', '%');
+        
+        // FIXED: Use $executeRaw with template syntax instead of $executeRawUnsafe
+        const result = await prisma.$executeRaw`
+          DELETE FROM "AnalyticsCache" WHERE "cacheKey" LIKE ${likePattern}
+        `;
+        
+        logger.info(`Deleted ${result} DB cache entries matching: ${pattern}`);
+      } catch (error) {
+        logger.error('DB pattern delete error:', error);
+      }
+    }
+
+    return deletedCount;
+  } catch (error) {
+    logger.error('Cache pattern delete error:', error);
+    return 0;
   }
+}
+
+/**
+ * Delete single key - FIXED: Added missing method
+ */
+async del(key: string): Promise<boolean> {
+  return await this.delete(key);
+}
+
+/**
+ * Flush all cache - FIXED: Added missing method
+ */
+async flush(): Promise<boolean> {
+  try {
+    const redisSuccess = await this.safeRedisOperation(
+      () => redis.flushdb().then(() => true),
+      false
+    );
+
+    await prisma.analyticsCache.deleteMany({});
+    
+    logger.warn('All cache flushed');
+    return redisSuccess;
+  } catch (error) {
+    logger.error('Cache flush error:', error);
+    return false;
+  }
+}
 
   /**
    * Check if key exists
@@ -436,6 +467,7 @@ export class CacheService {
       return false;
     }
   }
+  
 }
 
 export const cacheService = new CacheService();

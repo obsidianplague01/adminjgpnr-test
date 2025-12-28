@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import prisma from '../../config/database';
+import { UserRole } from '@prisma/client';
 
 export class PaymentService {
   private readonly paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
@@ -154,16 +155,27 @@ export class PaymentService {
   }
 
   /**
-   * Handle webhook event
+   * Handle webhook event - FIXED: Timing attack vulnerability
    */
   async handleWebhook(payload: any, signature: string) {
-    // Verify webhook signature
+    // FIXED: Use crypto.timingSafeEqual to prevent timing attacks
     const hash = crypto
       .createHmac('sha512', this.paystackSecretKey)
       .update(JSON.stringify(payload))
       .digest('hex');
 
-    if (hash !== signature) {
+    // Convert strings to buffers for timing-safe comparison
+    const signatureBuffer = Buffer.from(signature);
+    const hashBuffer = Buffer.from(hash);
+
+    // Ensure buffers are same length to use timingSafeEqual
+    if (signatureBuffer.length !== hashBuffer.length) {
+      logger.warn('Invalid webhook signature length');
+      throw new AppError(401, 'Invalid webhook signature');
+    }
+
+    // Timing-safe comparison
+    if (!crypto.timingSafeEqual(signatureBuffer, hashBuffer)) {
       logger.warn('Invalid webhook signature received');
       throw new AppError(401, 'Invalid webhook signature');
     }
@@ -195,7 +207,7 @@ export class PaymentService {
   }
 
   /**
-   * Handle successful payment
+   * Handle successful payment - FIXED: Notification to admins
    */
   private async handleSuccessfulPayment(data: any) {
     const orderId = data.metadata?.orderId;
@@ -237,22 +249,32 @@ export class PaymentService {
         },
       });
 
-      // Create notification
-      await tx.notification.create({
-        data: {
-          userId: order.customerId,
-          title: 'Payment Successful',
-          message: `Payment of ₦${order.amount} for order ${order.orderNumber} was successful`,
-          type: 'SUCCESS',
+      // FIXED: Create notifications for admins, not customer
+      const admins = await tx.user.findMany({
+        where: {
+          role: { in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
+          isActive: true,
         },
+        select: { id: true },
       });
+
+      for (const admin of admins) {
+        await tx.notification.create({
+          data: {
+            userId: admin.id,
+            title: 'Payment Successful',
+            message: `Payment of ₦${order.amount} for order ${order.orderNumber} from ${order.customer.firstName} ${order.customer.lastName} was successful`,
+            type: 'SUCCESS',
+          },
+        });
+      }
     });
 
     logger.info(`Payment processed for order: ${order.orderNumber}`);
   }
 
   /**
-   * Handle failed payment
+   * Handle failed payment - FIXED: Notification to admins
    */
   private async handleFailedPayment(data: any) {
     const orderId = data.metadata?.orderId;
@@ -261,19 +283,30 @@ export class PaymentService {
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
+      include: { customer: true },
     });
 
     if (!order) return;
 
-    // Create notification
-    await prisma.notification.create({
-      data: {
-        userId: order.customerId,
-        title: 'Payment Failed',
-        message: `Payment for order ${order.orderNumber} failed. Please try again.`,
-        type: 'ERROR',
+    // FIXED: Create notifications for admins instead of customer
+    const admins = await prisma.user.findMany({
+      where: {
+        role: { in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
+        isActive: true,
       },
+      select: { id: true },
     });
+
+    for (const admin of admins) {
+      await prisma.notification.create({
+        data: {
+          userId: admin.id,
+          title: 'Payment Failed',
+          message: `Payment for order ${order.orderNumber} from ${order.customer.firstName} ${order.customer.lastName} failed. Please investigate.`,
+          type: 'ERROR',
+        },
+      });
+    }
 
     logger.warn(`Payment failed for order: ${order.orderNumber}`);
   }
