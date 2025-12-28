@@ -1,4 +1,4 @@
-// src/middleware/auth.ts
+// src/middleware/auth.ts 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { UserRole } from '@prisma/client';
@@ -8,6 +8,14 @@ import prisma from '../config/database';
 import { cacheService } from '../utils/cache.service';
 import path from 'path';
 
+export interface JWTPayload {
+  userId: string;
+  email: string;
+  role: UserRole;
+  tokenVersion?: number;
+  iat?: number;
+  exp?: number;
+}
 
 declare global {
   namespace Express {
@@ -17,10 +25,10 @@ declare global {
   }
 }
 
+
 const isTokenBlacklisted = async (token: string): Promise<boolean> => {
   try {
-    const blacklisted = await cacheService.exists(`blacklist:${token}`);
-    return blacklisted;
+    return await cacheService.exists(`blacklist:${token}`);
   } catch (error) {
     logger.error('Token blacklist check failed:', error);
     return false;
@@ -37,7 +45,7 @@ export const blacklistToken = async (token: string, expiresIn: number): Promise<
   }
 };
 
-export const authenticateJWT = async (
+export const authenticate = async (
   req: Request,
   res: Response,
   next: NextFunction
@@ -53,51 +61,65 @@ export const authenticateJWT = async (
 
     const token = authHeader.substring(7);
 
+    // Check blacklist
     if (await isTokenBlacklisted(token)) {
       logger.warn('Blacklisted token used', { ip: req.ip });
       res.status(401).json({ error: 'Token has been revoked' });
       return;
     }
 
+    // Verify JWT
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
-  
+
+    // Fetch user & verify active status + token version
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, role: true, isActive: true, tokenVersion: true },
+      select: { 
+        id: true, 
+        email: true, 
+        role: true, 
+        isActive: true, 
+        tokenVersion: true 
+      },
     });
-    if (user.tokenVersion !== decoded.tokenVersion) {
-      logger.warn('Token version mismatch', { userId: user.id });
-      res.status(401).json({ error: 'Token has been invalidated' });
-      return;
-    }
+
     if (!user) {
-      logger.warn('Token for non-existent user', { userId: decoded.userId, ip: req.ip });
+      logger.warn('Token for non-existent user', { 
+        userId: decoded.userId, 
+        ip: req.ip 
+      });
       res.status(401).json({ error: 'User not found' });
       return;
     }
 
+    // Token version check
     if (decoded.tokenVersion !== undefined && user.tokenVersion !== decoded.tokenVersion) {
-      logger.warn('Token version mismatch', { userId: user.id });
+      logger.warn('Token version mismatch', { 
+        userId: user.id,
+        expected: user.tokenVersion,
+        received: decoded.tokenVersion
+      });
       res.status(401).json({ error: 'Token has been invalidated' });
       return;
     }
 
-    if (!user.isActive) { 
+    // Active status check
+    if (!user.isActive) {
       logger.warn('Inactive user attempted access', { 
-        userId: user.id, 
-        isActive: user.isActive,
+        userId: user.id,
         ip: req.ip 
       });
       res.status(403).json({ error: 'Account is not active' });
       return;
     }
-    
-    monitoring.setUser(user.id, user.email);
 
+    // Set user context
+    monitoring.setUser(user.id, user.email);
     req.user = {
       userId: user.id,
       email: user.email,
       role: user.role,
+      tokenVersion: user.tokenVersion,
     };
 
     next();
@@ -107,7 +129,7 @@ export const authenticateJWT = async (
       res.status(401).json({ error: 'Token expired' });
       return;
     }
-    
+
     if (error instanceof jwt.JsonWebTokenError) {
       logger.warn('Invalid token format', { ip: req.ip, message: error.message });
       res.status(401).json({ error: 'Invalid token' });
@@ -119,6 +141,8 @@ export const authenticateJWT = async (
     res.status(401).json({ error: 'Authentication failed' });
   }
 };
+
+export const authenticateJWT = authenticate;
 
 export const requireRole = (...roles: UserRole[]) => {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -151,7 +175,8 @@ export const requireSuperAdmin = requireRole(UserRole.SUPER_ADMIN);
 export const requireAdmin = requireRole(UserRole.SUPER_ADMIN, UserRole.ADMIN);
 export const requireStaff = requireRole(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.STAFF);
 
-export const authenticate = authenticateJWT;
+
+export const authorize = requireRole;
 
 export const authorizeFileAccess = async (
   req: Request,
@@ -168,6 +193,7 @@ export const authorizeFileAccess = async (
     const userRole = req.user.role as UserRole;
     const isAdmin = userRole === UserRole.ADMIN || userRole === UserRole.SUPER_ADMIN;
 
+    
     if (req.path.includes('/qrcodes/')) {
       if (!isAdmin) {
         logger.warn('Non-admin QR code access attempt', {
@@ -180,7 +206,6 @@ export const authorizeFileAccess = async (
       }
 
       const ticketCode = filename.replace('.png', '');
-      
       const exists = await prisma.ticket.findUnique({
         where: { ticketCode },
         select: { id: true },
@@ -195,6 +220,8 @@ export const authorizeFileAccess = async (
         return;
       }
     }
+
+    
     if (req.path.includes('/avatars/')) {
       if (!isAdmin) {
         logger.warn('Non-admin avatar access attempt', {
@@ -231,7 +258,7 @@ export const authorizeFileAccess = async (
 
 export const optionalAuth = async (
   req: Request,
-  _res: Response, 
+  _res: Response,
   next: NextFunction
 ): Promise<void> => {
   const authHeader = req.headers.authorization;
@@ -247,14 +274,22 @@ export const optionalAuth = async (
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, role: true, isActive: true }, 
+      select: { 
+        id: true, 
+        email: true, 
+        role: true, 
+        isActive: true,
+        tokenVersion: true,
+      },
     });
 
-    if (user && user.isActive) { 
+    if (user && user.isActive && 
+        (decoded.tokenVersion === undefined || user.tokenVersion === decoded.tokenVersion)) {
       req.user = {
         userId: user.id,
         email: user.email,
         role: user.role,
+        tokenVersion: user.tokenVersion,
       };
     }
   } catch (error) {

@@ -1,10 +1,15 @@
-// src/app.ts
+// src/app.ts 
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import path from 'path';
+import cookieParser from 'cookie-parser';
+
+// Middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { sanitizeInput } from './middleware/validate';
+import { authenticate, authorizeFileAccess } from './middleware/auth';
+import { csrfProtection, getCsrfToken, csrfErrorHandler } from './middleware/csrf';
 import { 
   apiLimiter, 
   authLimiter, 
@@ -12,13 +17,12 @@ import {
   orderLimiter,
   fileDownloadLimiter,
 } from './middleware/rateLimit';
-import { authenticate , authorizeFileAccess } from './middleware/auth';
-import { logger } from './utils/logger';
-import { initializeSentry, getSentryMiddleware } from './config/monitoring';
-import { csrfProtection, getCsrfToken, csrfErrorHandler } from './middleware/csrf';
-import cookieParser from 'cookie-parser';
 
-// Import routes
+// Monitoring
+import { initializeSentry, getSentryMiddleware } from './config/monitoring';
+import { logger } from './utils/logger';
+
+// Routes
 import authRoutes from './modules/auth/auth.routes';
 import ticketRoutes from './modules/tickets/ticket.routes';
 import orderRoutes from './modules/orders/order.routes';
@@ -33,27 +37,21 @@ import batchRoutes from './modules/batch/batch.routes';
 import monitoringRoutes from './modules/monitoring/monitoring.routes';
 import paymentRoutes from './modules/payment/payment.routes';
 import auditRoutes from './modules/audit/audit.routes';
+
 const app = express();
 const API_VERSION = 'v1';
 
-app.use(`/api/${API_VERSION}/auth`, authRoutes);
-app.use(`/api/${API_VERSION}/orders`, authenticate, orderRoutes);
-app.use(`/api/${API_VERSION}/customers`, authenticate, customerRoutes);
-app.use(`/api/${API_VERSION}/tickets`, authenticate, ticketRoutes);
-app.use(`/api/${API_VERSION}/payments`, authenticate, paymentRoutes);
-app.use(`/api/${API_VERSION}/analytics`, authenticate, analyticsRoutes);
-app.use(`/api/${API_VERSION}/users`, authenticate, userRoutes);
-app.use(`/api/${API_VERSION}/settings`, authenticate, settingsRoutes);
-app.use(`/api/${API_VERSION}/audit`, authenticate, auditRoutes); 
 initializeSentry(app);
 const sentryMiddleware = getSentryMiddleware();
 app.use(sentryMiddleware.requestHandler);
 app.use(sentryMiddleware.tracingHandler);
+
 app.use('/api/payments/webhook', express.json({
   verify: (req: any, _res, buf) => {
     req.rawBody = buf.toString('utf8');
   }
 }));
+
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -64,11 +62,10 @@ app.get('/health', (_req, res) => {
 });
 
 app.use(helmet({
- 
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],  
+      styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: ["'self'"],
@@ -78,57 +75,37 @@ app.use(helmet({
       frameSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
-      frameAncestors: ["'none'"], 
+      frameAncestors: ["'none'"],
     },
   },
-  
   hsts: {
-    maxAge: 31536000, 
+    maxAge: 31536000,
     includeSubDomains: true,
     preload: true,
   },
-  
   noSniff: true,
-  
   xssFilter: true,
-  
-  referrerPolicy: {
-    policy: 'strict-origin-when-cross-origin',
-  },
-  
-  permittedCrossDomainPolicies: {
-    permittedPolicies: 'none',
-  },
-  
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  permittedCrossDomainPolicies: { permittedPolicies: 'none' },
   hidePoweredBy: true,
-  
-  crossOriginEmbedderPolicy: false,  
+  crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: { policy: 'same-origin' },
   crossOriginResourcePolicy: { policy: 'same-origin' },
 }));
 
-
 app.use((_req, res, next) => {
-
   res.setHeader('X-Frame-Options', 'DENY');
-  
-  res.setHeader('Permissions-Policy', 
-    'geolocation=(), microphone=(), camera=()'
-  );
-  
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   if (process.env.NODE_ENV === 'production') {
-    res.setHeader('Expect-CT', 
-      'max-age=86400, enforce'
-    );
+    res.setHeader('Expect-CT', 'max-age=86400, enforce');
   }
-  
   next();
 });
+
 const allowedOrigins = process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'];
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -138,80 +115,38 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token'],
   exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Per-Page'],
-  maxAge: 86400, 
+  maxAge: 86400,
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
 app.use(sanitizeInput);
-app.use('/uploads/qrcodes', 
-  authenticate, 
-  authorizeFileAccess, 
-  fileDownloadLimiter, 
-  express.static(path.join(__dirname, '../uploads/qrcodes'))
-);
-
-app.use('/uploads/documents', 
-  authenticate, 
-  authorizeFileAccess, 
-  fileDownloadLimiter, 
-  express.static(path.join(__dirname, '../uploads/documents'))
-);
-app.use('/uploads/avatars', authenticate, express.static(path.join(__dirname, '../uploads/avatars')));
-
 
 if (process.env.TRUST_PROXY === 'true') {
   app.set('trust proxy', 1);
 }
-app.use('/api/auth', authLimiter, authRoutes);
-
-if (paymentRoutes) {
-  app.use('/api/payments', paymentLimiter, paymentRoutes);
-}
-app.use(cookieParser());
 
 app.get('/api/csrf-token', csrfProtection, getCsrfToken);
-app.use('/api/orders', authenticate, csrfProtection, orderRoutes);
-app.use('/api/payments', authenticate, csrfProtection, paymentRoutes);
-app.use('/api/tickets', authenticate, csrfProtection, ticketRoutes);
-app.use(['/api/customers', '/api/email'], 
-  authenticate, 
-  csrfProtection
-);
-app.use(csrfErrorHandler);
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api', apiLimiter);
 
-app.use('/api/tickets', apiLimiter, ticketRoutes);
-app.use('/api/orders', orderLimiter, orderRoutes);
-app.use('/api/customers', apiLimiter, customerRoutes);
-app.use('/api/email', apiLimiter, emailRoutes);
-app.use('/api/notifications', apiLimiter, notificationRoutes);
-app.use('/api/subscribers', apiLimiter, subscriberRoutes);
+app.use(`/api/${API_VERSION}/orders`, authenticate, csrfProtection, orderLimiter, orderRoutes);
+app.use(`/api/${API_VERSION}/payments`, authenticate, csrfProtection, paymentLimiter, paymentRoutes);
+app.use(`/api/${API_VERSION}/tickets`, authenticate, csrfProtection, ticketRoutes);
+app.use(`/api/${API_VERSION}/customers`, authenticate, csrfProtection, customerRoutes);
+app.use(`/api/${API_VERSION}/email`, authenticate, csrfProtection, emailRoutes);
+app.use(`/api/${API_VERSION}/batch`, authenticate, csrfProtection, batchRoutes);
 
-app.use('/api/settings', apiLimiter, settingsRoutes);
-app.use('/api/settings/advanced', apiLimiter, advancedSettingsRoutes);
-
-app.use('/api/analytics', apiLimiter, analyticsRoutes);
-
-app.use('/api/batch', apiLimiter, batchRoutes);
-
-app.use('/api/monitoring', apiLimiter, monitoringRoutes);
-
-app.use(notFoundHandler);
-
-app.use(sentryMiddleware.errorHandler);
-
-app.use(errorHandler);
-
-
-app.use('/uploads/qrcodes', 
-  authenticate, 
-  authorizeFileAccess,
-  fileDownloadLimiter, 
-  express.static(path.join(__dirname, '../uploads/qrcodes')))
-app.use('/uploads/avatars', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/avatars')));
-app.use('/uploads/documents', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/documents')));
+app.use(`/api/${API_VERSION}/analytics`, authenticate, analyticsRoutes);
+app.use(`/api/${API_VERSION}/notifications`, authenticate, notificationRoutes);
+app.use(`/api/${API_VERSION}/subscribers`, authenticate, subscriberRoutes);
+app.use(`/api/${API_VERSION}/settings`, authenticate, settingsRoutes);
+app.use(`/api/${API_VERSION}/settings/advanced`, authenticate, advancedSettingsRoutes);
+app.use(`/api/${API_VERSION}/monitoring`, authenticate, monitoringRoutes);
+app.use(`/api/${API_VERSION}/audit`, authenticate, auditRoutes);
 
 app.use('/uploads/qrcodes', 
   authenticate, 
@@ -226,5 +161,17 @@ app.use('/uploads/documents',
   fileDownloadLimiter, 
   express.static(path.join(__dirname, '../uploads/documents'))
 );
+
+app.use('/uploads/avatars', 
+  authenticate, 
+  authorizeFileAccess,
+  fileDownloadLimiter,
+  express.static(path.join(__dirname, '../uploads/avatars'))
+);
+
+app.use(csrfErrorHandler);
+app.use(notFoundHandler);
+app.use(sentryMiddleware.errorHandler);
+app.use(errorHandler);
 
 export default app;

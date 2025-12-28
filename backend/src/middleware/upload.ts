@@ -1,4 +1,4 @@
-// src/middleware/upload.ts
+// src/middleware/upload.ts 
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -8,10 +8,9 @@ import { fileTypeFromBuffer } from 'file-type';
 import { logger } from '../utils/logger';
 import { promises as fsPromises } from 'fs';
 
-
 const ALLOWED_EXTENSIONS = [
-  '.jpg', '.jpeg', '.png', '.gif', '.webp',  // Images
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx',  // Documents
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx',
 ];
 
 const ALLOWED_MIME_TYPES = [
@@ -23,11 +22,16 @@ const ALLOWED_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ];
 
+const MAX_FILE_SIZE = 12 * 1024 * 1024; 
+const MAX_FILES = 5;
+
+
 const ensureDir = (dir: string) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 };
+
 
 const storage = multer.diskStorage({
   destination: (_req, file, cb) => {
@@ -35,7 +39,7 @@ const storage = multer.diskStorage({
     if (file.fieldname === 'avatar') uploadPath = 'uploads/avatars';
     else if (file.fieldname === 'customerDoc') uploadPath = 'uploads/customer-documents';
     else if (file.fieldname === 'orderDoc') uploadPath = 'uploads/order-documents';
-    
+
     try {
       ensureDir(uploadPath);
       cb(null, uploadPath);
@@ -47,10 +51,8 @@ const storage = multer.diskStorage({
     try {
       const uniqueSuffix = crypto.randomBytes(16).toString('hex');
       const ext = path.extname(file.originalname);
-      
-      // Sanitize extension to prevent path traversal
       const sanitizedExt = ext.replace(/[^a-zA-Z0-9.-]/g, '');
-      
+
       cb(null, `${Date.now()}-${uniqueSuffix}${sanitizedExt}`);
     } catch (error) {
       cb(new Error('Failed to generate filename'), '');
@@ -58,33 +60,29 @@ const storage = multer.diskStorage({
   },
 });
 
-const fileFilter = async (
+
+const fileFilter = (
   _req: Request,
   file: Express.Multer.File,
   cb: multer.FileFilterCallback
 ) => {
   try {
-   
+    
     const ext = path.extname(file.originalname).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       return cb(new Error(`File extension ${ext} not allowed`));
     }
-
-    
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
       return cb(new Error(`MIME type ${file.mimetype} not allowed`));
     }
 
-    
     const basename = path.basename(file.originalname);
     if (basename !== file.originalname) {
       return cb(new Error('Invalid filename: path traversal detected'));
     }
 
-    
     const nameParts = file.originalname.split('.');
     if (nameParts.length > 2) {
-     
       return cb(new Error('Multiple file extensions not allowed'));
     }
 
@@ -94,13 +92,12 @@ const fileFilter = async (
   }
 };
 
-
 export const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB max
-    files: 5,
+    fileSize: MAX_FILE_SIZE,
+    files: MAX_FILES,
   },
 });
 
@@ -112,7 +109,7 @@ export const validateUploadedFile = async (filepath: string): Promise<boolean> =
 
     if (!fileType) {
       logger.warn('Could not determine file type from magic bytes', { filepath });
-      await fsPromises.unlink(filepath);  
+      await fsPromises.unlink(filepath);
       return false;
     }
 
@@ -127,12 +124,14 @@ export const validateUploadedFile = async (filepath: string): Promise<boolean> =
       return false;
     }
 
-    const content = buffer.toString('utf8', 0, 1024); 
+    const content = buffer.toString('utf8', 0, 1024);
     const dangerousPatterns = [
-      /<script/i,
-      /<\?php/i,
-      /<%/, 
-      /#!/,  
+      /<script/i,      
+      /<\?php/i,       
+      /<%/,            
+      /#!/,            
+      /__import__/i,   
+      /eval\(/i,       
     ];
 
     for (const pattern of dangerousPatterns) {
@@ -150,13 +149,13 @@ export const validateUploadedFile = async (filepath: string): Promise<boolean> =
   }
 };
 
+
 export const uploadSingle = upload.single('file');
 export const uploadAvatar = upload.single('avatar');
 export const uploadCustomerDoc = upload.single('customerDoc');
 export const uploadOrderDoc = upload.single('orderDoc');
-export const uploadMultiple = upload.array('files', 5);
+export const uploadMultiple = upload.array('files', MAX_FILES);
 
-// Delete file helper
 export const deleteFile = (filepath: string): boolean => {
   try {
     if (fs.existsSync(filepath)) {
@@ -165,7 +164,7 @@ export const deleteFile = (filepath: string): boolean => {
     }
     return false;
   } catch (error) {
-    console.error('Error deleting file:', error);
+    logger.error('Error deleting file:', error);
     return false;
   }
 };
