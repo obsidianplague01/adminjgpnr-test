@@ -123,6 +123,10 @@ ALTER TABLE "customers" ADD COLUMN "avatar" VARCHAR(255);
 CREATE INDEX "tickets_validUntil_status_idx" ON "tickets"("validUntil", "status");
 CREATE INDEX "tickets_scanCount_maxScans_idx" ON "tickets"("scanCount", "maxScans");
 CREATE INDEX "ticket_scans_scannedBy_idx" ON "ticket_scans"("scannedBy");
+ALTER TABLE "system_settings" 
+  ADD CONSTRAINT "valid_operating_days" 
+  CHECK (jsonb_typeof("operatingDays") = 'array');
+
 CREATE INDEX "customers_totalSpent_idx" ON "customers"("totalSpent" DESC);
 CREATE INDEX "customers_lastPurchase_idx" ON "customers"("lastPurchase" DESC);
 

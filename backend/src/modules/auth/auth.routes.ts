@@ -79,6 +79,7 @@ router.post(
   twoFactorController.generateSecret
 );
 
+
 router.post(
   '/2fa/enable',
   twoFactorLimiter,
@@ -88,7 +89,12 @@ router.post(
 
 router.post(
   '/2fa/verify',
-  twoFactorLimiter, // CRITICAL: Prevent brute force
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5, // 5 attempts per 15 minutes
+    skipSuccessfulRequests: true,
+  }),
+  twoFactorLimiter, 
   twoFactorController.verifyToken
 );
 

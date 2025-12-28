@@ -43,21 +43,21 @@ export class CacheService {
   }
 
   private async safeRedisOperation<T>(
-    operation: () => Promise<T>,
-    fallback: T
-  ): Promise<T> {
-    if (!this.isRedisHealthy) {
-      logger.warn('Redis unavailable, skipping cache operation');
-      return fallback;
-    }
+  operation: () => Promise<T>,
+  fallback: T
+): Promise<T> {
+  if (!this.isRedisHealthy) {
+    logger.warn('Redis unavailable, using fallback');
+    return fallback;
+  }
 
-    try {
-      return await operation();
-    } catch (error) {
-      logger.error('Redis operation failed:', error);
-      this.isRedisHealthy = false;
-      return fallback;
-    }
+  try {
+    return await operation();
+  } catch (error) {
+    logger.error('Redis operation failed:', error);
+    this.isRedisHealthy = false;
+    return fallback;
+  }
   }
 
   async get<T>(key: string): Promise<T | null> {

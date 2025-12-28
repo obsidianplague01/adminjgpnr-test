@@ -13,28 +13,31 @@ import { TicketService } from '../tickets/ticket.service';
 import { emailQueue } from '../../config/queue';
 import { logger } from '../../utils/logger';
 import { invalidateCache } from '../../middleware/cache';
+import crypto from 'crypto';
 
 const ticketService = new TicketService();
-
-export class OrderService {
-  /**
-   * Generate unique order number - FIXED: More collision-resistant format
-   */
-  private generateOrderNumber(): string {
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const time = Date.now().toString().slice(-6); // Last 6 digits of timestamp
-    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    
-    // Format: ORD-YYYYMMDD-TTTTTTRRR (timestamp + random = unique)
-    return `ORD-${year}${month}${day}-${time}${random}`;
+function generateSecureCode(length: number, charset: string): string {
+  const result: string[] = [];
+  const randomBytes = crypto.randomBytes(length * 2); // Extra bytes for safety
+  
+  let cursor = 0;
+  while (result.length < length && cursor < randomBytes.length) {
+    const byte = randomBytes[cursor];
+    if (byte < charset.length * Math.floor(256 / charset.length)) {
+      result.push(charset[byte % charset.length]);
+    }
+    cursor++;
   }
   
-  /**
-   * Create new order with tickets - FIXED: Race condition in order number generation
-   */
+  return result.join('');
+}
+export class OrderService {
+  
+ private generateOrderNumber(): string {
+  const timestamp = Date.now().toString(36).toUpperCase(); // Base36 timestamp
+  const random = crypto.randomBytes(4).toString('hex').toUpperCase();
+  return `ORD-${timestamp}-${random}`;
+}
   async createOrder(data: CreateOrderInput) {
     const start = Date.now();
     
@@ -455,11 +458,11 @@ export class OrderService {
   }
 
   // Helper methods
-  private generateTicketCode(): string {
-    const year = new Date().getFullYear();
-    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    return `JGPNR-${year}-${random}`;
+ private generateTicketCode(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed ambiguous chars: 0,O,1,I
+    return generateSecureCode(8, chars);
   }
+
 
   private addDays(date: Date, days: number): Date {
     const result = new Date(date);

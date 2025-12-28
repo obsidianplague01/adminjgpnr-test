@@ -3,6 +3,8 @@ import { TicketStatus } from '@prisma/client';
 import prisma from '../../config/database';
 import { monitoring } from '../../utils/monitoring.service';
 import { AppError } from '../../middleware/errorHandler';
+import { AuditLogger, AuditAction, AuditEntity } from '../../utils/audit';
+import crypto from 'crypto';
 import {
   CreateTicketInput,
   UpdateTicketInput,
@@ -19,7 +21,21 @@ import {
   isTicketExpired,
 } from '../../utils/ticket.utils';
 import { logger } from '../../utils/logger';
-
+function generateSecureCode(length: number, charset: string): string {
+  const result: string[] = [];
+  const randomBytes = crypto.randomBytes(length * 2); // Extra bytes for safety
+  
+  let cursor = 0;
+  while (result.length < length && cursor < randomBytes.length) {
+    const byte = randomBytes[cursor];
+    if (byte < charset.length * Math.floor(256 / charset.length)) {
+      result.push(charset[byte % charset.length]);
+    }
+    cursor++;
+  }
+  
+  return result.join('');
+}
 export class TicketService {
   async createTickets(data: CreateTicketInput) {
     const order = await prisma.order.findUnique({
@@ -178,14 +194,44 @@ export class TicketService {
     return ticket;
   }
 
-  async cancelTicket(ticketId: string) {
-    const ticket = await prisma.ticket.update({
-      where: { id: ticketId },
-      data: { status: TicketStatus.CANCELLED },
+  async cancelTicket(id: string, reason: string, context: AuditContext) {
+    const ticket = await prisma.ticket.findUnique({
+      where: { id },
+      include: { order: { include: { customer: true } } },
     });
 
-    logger.info(`Ticket cancelled: ${ticket.ticketCode}`);
-    return ticket;
+    if (!ticket) {
+      throw new AppError(404, 'Ticket not found');
+    }
+
+    if (ticket.status === 'CANCELLED') {
+      throw new AppError(400, 'Ticket already cancelled');
+    }
+
+    const updated = await prisma.ticket.update({
+      where: { id },
+      data: { 
+        status: 'CANCELLED',
+        notes: `Cancelled: ${reason}`,
+      },
+    });
+
+    // ✅ Audit log
+    await AuditLogger.log({
+      action: AuditAction.TICKET_CANCELLED,
+      entity: AuditEntity.TICKET,
+      entityId: id,
+      details: {
+        ticketCode: ticket.ticketCode,
+        orderId: ticket.orderId,
+        customerEmail: ticket.order.customer.email,
+        reason,
+        previousStatus: ticket.status,
+      },
+      context,
+    });
+
+    return updated;
   }
 
   async validateTicket(data: ValidateTicketInput) {

@@ -11,6 +11,14 @@ import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import crypto from 'crypto';
 
+export interface JWTPayload {
+  userId: string;
+  email: string;
+  role: UserRole;
+  tokenVersion?: number;
+  iat?: number;
+  exp?: number;
+}
 const getSaltRounds = (): number => {
   const envRounds = parseInt(process.env.BCRYPT_ROUNDS || '14');
   if (envRounds < 12 || envRounds > 16) {
@@ -128,6 +136,7 @@ export class AuthService {
         userId: user.id,
         email: user.email,
         role: user.role,
+        tokenVersion: user.tokenVersion
       };
 
       const accessToken = jwt.sign(

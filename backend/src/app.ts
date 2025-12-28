@@ -39,7 +39,11 @@ initializeSentry(app);
 const sentryMiddleware = getSentryMiddleware();
 app.use(sentryMiddleware.requestHandler);
 app.use(sentryMiddleware.tracingHandler);
-
+app.use('/api/payments/webhook', express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -128,11 +132,7 @@ app.use(cors({
   exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Per-Page'],
   maxAge: 86400, 
 }));
-app.use('/api/payments/webhook', express.json({
-  verify: (req: any, res, buf, encoding) => {
-    req.rawBody = buf.toString(encoding || 'utf8');
-  }
-}));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(sanitizeInput);
@@ -162,15 +162,14 @@ if (paymentRoutes) {
 }
 app.use(cookieParser());
 
-// CSRF token endpoint
 app.get('/api/csrf-token', csrfProtection, getCsrfToken);
-
-// Apply CSRF protection to state-changing routes
 app.use('/api/orders', authenticate, csrfProtection, orderRoutes);
 app.use('/api/payments', authenticate, csrfProtection, paymentRoutes);
 app.use('/api/tickets', authenticate, csrfProtection, ticketRoutes);
-
-// CSRF error handler
+app.use(['/api/customers', '/api/email'], 
+  authenticate, 
+  csrfProtection
+);
 app.use(csrfErrorHandler);
 
 app.use('/api/tickets', apiLimiter, ticketRoutes);
@@ -195,7 +194,12 @@ app.use(sentryMiddleware.errorHandler);
 
 app.use(errorHandler);
 
-app.use('/uploads/qrcodes', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/qrcodes')));
+
+app.use('/uploads/qrcodes', 
+  authenticate, 
+  authorizeFileAccess,
+  fileDownloadLimiter, 
+  express.static(path.join(__dirname, '../uploads/qrcodes')))
 app.use('/uploads/avatars', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/avatars')));
 app.use('/uploads/documents', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/documents')));
 

@@ -7,6 +7,7 @@ import {
   ListCustomersInput,
 } from './customer.schema';
 import { validateUploadedFile } from '../../middleware/upload';
+import { AuditLogger } from '../../utils/audit';
 const customerService = new CustomerService();
 
 export const createCustomer = asyncHandler(async (req: Request, res: Response) => {
@@ -36,7 +37,10 @@ export const updateCustomer = asyncHandler(async (req: Request, res: Response) =
 
 export const deleteCustomer = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const result = await customerService.deleteCustomer(id);
+  
+  const context = AuditLogger.getContextFromRequest(req);
+  
+  const result = await customerService.deleteCustomer(id, context);
   res.json(result);
 });
 

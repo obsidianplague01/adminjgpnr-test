@@ -10,7 +10,7 @@ import {
   UpdateCustomerInput,
   ListCustomersInput,
 } from './customer.schema';
-
+import { AuditLogger, AuditAction, AuditEntity } from '../../utils/audit';
 export class CustomerService {
   /**
    * Create new customer
@@ -176,33 +176,40 @@ export class CustomerService {
     return customer;
   }
 
-  async deleteCustomer(customerId: string) {
-    const customer = await prisma.customer.findUnique({
-      where: { id: customerId },
-      include: {
-        orders: true,
-      },
-    });
+  async deleteCustomer(id: string, context: AuditContext) {
+  const customer = await prisma.customer.findUnique({
+    where: { id },
+    select: { id: true, email: true, firstName: true, lastName: true },
+  });
 
-    if (!customer) {
-      throw new AppError(404, 'Customer not found');
-    }
-
-    if (customer.orders.length > 0) {
-      throw new AppError(
-        400,
-        'Cannot delete customer with existing orders. Consider deactivating instead.'
-      );
-    }
-
-    
-    await prisma.customer.delete({
-      where: { id: customerId },
-    });
-
-    logger.info(`Customer deleted: ${customer.email}`);
-    return { message: 'Customer deleted successfully' };
+  if (!customer) {
+    throw new AppError(404, 'Customer not found');
   }
+
+  // ✅ Audit BEFORE deletion (so we have the data)
+  await AuditLogger.log({
+    action: AuditAction.CUSTOMER_DELETED,
+    entity: AuditEntity.CUSTOMER,
+    entityId: id,
+    details: {
+      email: customer.email,
+      name: `${customer.firstName} ${customer.lastName}`,
+    },
+    context,
+  });
+
+  // Perform deletion
+  await prisma.customer.delete({
+    where: { id },
+  });
+
+  logger.info(`Customer deleted: ${customer.email}`, {
+    customerId: id,
+    deletedBy: context.userId,
+  });
+
+  return { message: 'Customer deleted successfully' };
+}
 
   async deactivateCustomer(customerId: string) {
     const customer = await prisma.customer.update({
