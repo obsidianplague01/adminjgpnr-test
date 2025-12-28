@@ -138,7 +138,7 @@ export const validateUploadedFile = async (filepath: string): Promise<boolean> =
     for (const pattern of dangerousPatterns) {
       if (pattern.test(content)) {
         logger.warn('Malicious content detected in upload', { filepath });
-        await fs.unlink(filepath);
+        await fsPromises.unlink(filepath);
         return false;
       }
     }

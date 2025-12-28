@@ -1,15 +1,15 @@
 // src/modules/auth/auth.service.ts
+import jwt, { SignOptions } from 'jsonwebtoken';
+import { accountLockout } from '../../middleware/rateLimit';
 import bcrypt from 'bcrypt';
 import prisma from '../../config/database';
 import { AppError } from '../../middleware/errorHandler';
 import { LoginInput, CreateUserInput, UpdateUserInput, ChangePasswordInput } from './auth.schema';
-import { JWTPayload } from '../../middleware/auth';
 import { Prisma, UserRole } from '@prisma/client';
 import { logger } from '../../utils/logger';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import crypto from 'crypto';
-import jwt, { SignOptions } from 'jsonwebtoken';
 
 const getSaltRounds = (): number => {
   const envRounds = parseInt(process.env.BCRYPT_ROUNDS || '14');

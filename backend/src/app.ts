@@ -199,7 +199,18 @@ app.use('/uploads/qrcodes', authenticate, authorizeFileAccess, express.static(pa
 app.use('/uploads/avatars', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/avatars')));
 app.use('/uploads/documents', authenticate, authorizeFileAccess, express.static(path.join(__dirname, '../uploads/documents')));
 
-app.use('/uploads/qrcodes', authenticate, authorizeFileAccess, fileDownloadLimiter, express.static(...));
-app.use('/uploads/documents', authenticate, authorizeFileAccess, fileDownloadLimiter, express.static(...));
+app.use('/uploads/qrcodes', 
+  authenticate, 
+  authorizeFileAccess, 
+  fileDownloadLimiter, 
+  express.static(path.join(__dirname, '../uploads/qrcodes'))
+);
+
+app.use('/uploads/documents', 
+  authenticate, 
+  authorizeFileAccess, 
+  fileDownloadLimiter, 
+  express.static(path.join(__dirname, '../uploads/documents'))
+);
 
 export default app;

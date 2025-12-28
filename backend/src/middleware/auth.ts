@@ -8,14 +8,6 @@ import prisma from '../config/database';
 import { cacheService } from '../utils/cache.service';
 import path from 'path';
 
-export interface JWTPayload {
-  userId: string;
-  email: string;
-  role: UserRole;
-  tokenVersion?: number;
-  iat?: number;
-  exp?: number;
-}
 
 declare global {
   namespace Express {
@@ -81,6 +73,12 @@ export const authenticateJWT = async (
     if (!user) {
       logger.warn('Token for non-existent user', { userId: decoded.userId, ip: req.ip });
       res.status(401).json({ error: 'User not found' });
+      return;
+    }
+
+    if (decoded.tokenVersion !== undefined && user.tokenVersion !== decoded.tokenVersion) {
+      logger.warn('Token version mismatch', { userId: user.id });
+      res.status(401).json({ error: 'Token has been invalidated' });
       return;
     }
 
