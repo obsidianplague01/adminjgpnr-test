@@ -110,6 +110,22 @@ ORDER BY date DESC, location;
 CREATE INDEX ON analytics_scan_stats(date DESC);
 CREATE INDEX ON analytics_scan_stats(location);
 
+-- Add paidAt to orders table
+ALTER TABLE "orders" ADD COLUMN "paidAt" TIMESTAMP(3);
+
+-- Add index for paidAt
+CREATE INDEX "orders_paidAt_idx" ON "orders"("paidAt");
+
+-- Add avatar to customers table
+ALTER TABLE "customers" ADD COLUMN "avatar" VARCHAR(255);
+
+-- Add additional recommended indexes
+CREATE INDEX "tickets_validUntil_status_idx" ON "tickets"("validUntil", "status");
+CREATE INDEX "tickets_scanCount_maxScans_idx" ON "tickets"("scanCount", "maxScans");
+CREATE INDEX "ticket_scans_scannedBy_idx" ON "ticket_scans"("scannedBy");
+CREATE INDEX "customers_totalSpent_idx" ON "customers"("totalSpent" DESC);
+CREATE INDEX "customers_lastPurchase_idx" ON "customers"("lastPurchase" DESC);
+
 -- ===== REFRESH FUNCTION =====
 CREATE OR REPLACE FUNCTION refresh_analytics_views()
 RETURNS void AS $$

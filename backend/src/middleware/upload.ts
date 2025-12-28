@@ -4,6 +4,22 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { Request } from 'express';
+import { fileTypeFromBuffer } from 'file-type';
+
+
+const ALLOWED_EXTENSIONS = [
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',  // Images
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx',  // Documents
+];
+
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+];
 
 const ensureDir = (dir: string) => {
   if (!fs.existsSync(dir)) {
@@ -40,28 +56,43 @@ const storage = multer.diskStorage({
   },
 });
 
-const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const allowedMimes: Record<string, string[]> = {
-    image: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-    document: [
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ],
-  };
+const fileFilter = async (
+  _req: Request,
+  file: Express.Multer.File,
+  cb: multer.FileFilterCallback
+) => {
+  try {
+    // ✅ 1. Check file extension
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      return cb(new Error(`File extension ${ext} not allowed`));
+    }
 
-  const allAllowed = [...allowedMimes.image, ...allowedMimes.document];
+    // ✅ 2. Check MIME type
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      return cb(new Error(`MIME type ${file.mimetype} not allowed`));
+    }
 
-  if (allAllowed.includes(file.mimetype)) {
+    // ✅ 3. Validate filename (prevent path traversal)
+    const basename = path.basename(file.originalname);
+    if (basename !== file.originalname) {
+      return cb(new Error('Invalid filename: path traversal detected'));
+    }
+
+    // ✅ 4. Check for double extensions
+    const nameParts = file.originalname.split('.');
+    if (nameParts.length > 2) {
+      // Allow only one extension (name.ext, not name.php.png)
+      return cb(new Error('Multiple file extensions not allowed'));
+    }
+
     cb(null, true);
-  } else {
-    cb(new Error('Invalid file type. Allowed types: images (JPEG, PNG, GIF, WebP) and documents (PDF, DOC, DOCX, XLS, XLSX)'));
+  } catch (error) {
+    cb(new Error('File validation failed'));
   }
 };
 
-// Multer instance
+
 export const upload = multer({
   storage,
   fileFilter,
@@ -71,7 +102,52 @@ export const upload = multer({
   },
 });
 
-// Upload configurations
+export const validateUploadedFile = async (filepath: string): Promise<boolean> => {
+  try {
+    const buffer = await fs.readFile(filepath);
+
+    const fileType = await fileTypeFromBuffer(buffer);
+
+    if (!fileType) {
+      logger.warn('Could not determine file type from magic bytes', { filepath });
+      await fs.unlink(filepath);  
+      return false;
+    }
+
+    const allowedTypes = ['jpg', 'png', 'gif', 'webp', 'pdf', 'docx', 'xlsx'];
+    if (!allowedTypes.includes(fileType.ext)) {
+      logger.warn('File type mismatch', {
+        filepath,
+        claimedType: path.extname(filepath),
+        actualType: fileType.ext,
+      });
+      await fs.unlink(filepath);
+      return false;
+    }
+
+    const content = buffer.toString('utf8', 0, 1024); 
+    const dangerousPatterns = [
+      /<script/i,
+      /<\?php/i,
+      /<%/, 
+      /#!/,  
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(content)) {
+        logger.warn('Malicious content detected in upload', { filepath });
+        await fs.unlink(filepath);
+        return false;
+      }
+    }
+
+    return true;
+  } catch (error) {
+    logger.error('File validation error:', error);
+    return false;
+  }
+};
+
 export const uploadSingle = upload.single('file');
 export const uploadAvatar = upload.single('avatar');
 export const uploadCustomerDoc = upload.single('customerDoc');

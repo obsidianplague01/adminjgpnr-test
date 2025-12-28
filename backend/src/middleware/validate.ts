@@ -1,57 +1,62 @@
-// src/middleware/validate.ts - IMPROVED SANITIZATION
-import { Request, Response, NextFunction } from 'express';
-import { ZodSchema, ZodError } from 'zod';
-import { logger } from '../utils/logger';
-import DOMPurify from 'isomorphic-dompurify'; // Add this package
+// COMPREHENSIVE SANITIZATION
+import DOMPurify from 'isomorphic-dompurify';
+import validator from 'validator';
 
-export const validate = (schema: ZodSchema) => {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      await schema.parseAsync({
-        body: req.body,
-        query: req.query,
-        params: req.params,
-      });
-      next();
-    } catch (error) {
-      if (error instanceof ZodError) {
-        const errors = error.errors.map((err) => ({
-          field: err.path.join('.'),
-          message: err.message,
-        }));
-        logger.warn('Validation error:', { 
-          errors, 
-          path: req.path,
-          method: req.method,
-        });
-        res.status(400).json({ error: 'Validation failed', details: errors });
-        return;
-      }
-      logger.error('Unexpected validation error:', error);
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  };
-};
-
-// Enhanced sanitization using DOMPurify
 export const sanitizeString = (str: string): string => {
   if (typeof str !== 'string') return str;
   
-  // Use DOMPurify for HTML sanitization
-  const cleaned = DOMPurify.sanitize(str, {
-    ALLOWED_TAGS: [], // Strip all HTML tags
-    ALLOWED_ATTR: [], // Strip all attributes
-    KEEP_CONTENT: true, // Keep text content
+  let cleaned = DOMPurify.sanitize(str, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: [],
+    KEEP_CONTENT: true,
   });
   
-  return cleaned.trim();
+  cleaned = cleaned.replace(/[\x00-\x1F\x7F]/g, '');
+ 
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  const ldapChars = ['*', '(', ')', '\\', '\0'];
+  for (const char of ldapChars) {
+    cleaned = cleaned.replace(new RegExp(char, 'g'), '');
+  }
+  
+  return cleaned;
 };
 
-// Sanitize object recursively
-export const sanitizeObject = (obj: any): any => {
-  if (obj === null || obj === undefined) {
-    return obj;
+export const sanitizeMongoOperators = (obj: any): any => {
+  if (obj === null || obj === undefined) return obj;
+  
+  if (typeof obj === 'string') {
+    
+    return obj.replace(/^\$/, '');
   }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeMongoOperators);
+  }
+  
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    
+    for (const [key, value] of Object.entries(obj)) {
+      
+      const sanitizedKey = key.replace(/^\$/, '');
+      
+      if (['__proto__', 'constructor', 'prototype'].includes(sanitizedKey)) {
+        continue;
+      }
+      
+      sanitized[sanitizedKey] = sanitizeMongoOperators(value);
+    }
+    
+    return sanitized;
+  }
+  
+  return obj;
+};
+
+export const sanitizeObject = (obj: any): any => {
+  if (obj === null || obj === undefined) return obj;
   
   if (typeof obj === 'string') {
     return sanitizeString(obj);
@@ -61,29 +66,35 @@ export const sanitizeObject = (obj: any): any => {
     return obj.map(sanitizeObject);
   }
   
-  if (obj && typeof obj === 'object') {
+  if (typeof obj === 'object') {
     const sanitized: any = {};
+    
     for (const [key, value] of Object.entries(obj)) {
-      // Also sanitize keys to prevent prototype pollution
+      
       const sanitizedKey = sanitizeString(key);
-      if (!['__proto__', 'constructor', 'prototype'].includes(sanitizedKey)) {
-        sanitized[sanitizedKey] = sanitizeObject(value);
+      
+      if (['__proto__', 'constructor', 'prototype'].includes(sanitizedKey)) {
+        logger.warn('Prototype pollution attempt detected', { key });
+        continue;
       }
+      
+      sanitized[sanitizedKey] = sanitizeObject(value);
     }
+    
     return sanitized;
   }
   
   return obj;
 };
 
-// Apply sanitization middleware
 export const sanitizeInput = (req: Request, _res: Response, next: NextFunction) => {
   if (req.body && Object.keys(req.body).length > 0) {
-    req.body = sanitizeObject(req.body);
+    req.body = sanitizeObject(sanitizeMongoOperators(req.body));
   }
+  
   if (req.query && Object.keys(req.query).length > 0) {
-    req.query = sanitizeObject(req.query);
+    req.query = sanitizeObject(sanitizeMongoOperators(req.query));
   }
-  // Don't sanitize params as they're usually IDs validated by schemas
+  
   next();
 };

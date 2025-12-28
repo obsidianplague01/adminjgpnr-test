@@ -61,6 +61,12 @@ export const uploadDocument = asyncHandler(async (req: Request, res: Response) =
     res.status(400).json({ error: 'No file uploaded' });
     return;
   }
+  const isValid = await validateUploadedFile(req.file.path);
+  
+  if (!isValid) {
+    res.status(400).json({ error: 'File validation failed' });
+    return;
+  }
 
   const result = await customerService.uploadDocument(id, req.file);
   res.json(result);

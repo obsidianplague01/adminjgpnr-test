@@ -1,4 +1,4 @@
-// src/middleware/auth.ts - FIXED VERSION
+// src/middleware/auth.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { UserRole } from '@prisma/client';
@@ -67,18 +67,16 @@ export const authenticateJWT = async (
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
-
+  
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        isActive: true,
-        lastLoginAt: true,
-      },
+      select: { id: true, email: true, role: true, isActive: true, tokenVersion: true },
     });
-
+    if (user.tokenVersion !== decoded.tokenVersion) {
+      logger.warn('Token version mismatch', { userId: user.id });
+      res.status(401).json({ error: 'Token has been invalidated' });
+      return;
+    }
     if (!user) {
       logger.warn('Token for non-existent user', { userId: decoded.userId, ip: req.ip });
       res.status(401).json({ error: 'User not found' });
@@ -168,83 +166,47 @@ export const authorizeFileAccess = async (
     }
 
     const filename = path.basename(req.path);
-    // Fix: Use type assertion to handle UserRole properly
     const userRole = req.user.role as UserRole;
     const isAdmin = userRole === UserRole.ADMIN || userRole === UserRole.SUPER_ADMIN;
 
-    // QR codes - admin or ticket owner
     if (req.path.includes('/qrcodes/')) {
+      if (!isAdmin) {
+        logger.warn('Non-admin QR code access attempt', {
+          userId: req.user.userId,
+          role: req.user.role,
+          path: req.path,
+        });
+        res.status(403).json({ error: 'Admin access required' });
+        return;
+      }
+
       const ticketCode = filename.replace('.png', '');
       
-      const ticket = await prisma.ticket.findUnique({
+      const exists = await prisma.ticket.findUnique({
         where: { ticketCode },
-        include: {
-          order: {
-            include: {
-              customer: true,
-            },
-          },
-        },
+        select: { id: true },
       });
 
-      if (!ticket) {
+      if (!exists) {
         logger.warn('QR code access for non-existent ticket', {
           ticketCode,
           userId: req.user.userId,
         });
-        res.status(404).json({ error: 'Ticket not found' });
-        return;
-      }
-
-      const ownsTicket = ticket.order.customer.email === req.user.email;
-      
-      if (!isAdmin && !ownsTicket) {
-        logger.warn('Unauthorized QR code access attempt', {
-          ticketCode,
-          userId: req.user.userId,
-          ownerEmail: ticket.order.customer.email,
-        });
-        res.status(403).json({ error: 'Access denied' });
+        res.status(404).json({ error: 'Resource not found' });
         return;
       }
     }
-
-    // Note: Customer model doesn't have avatar field - this needs schema update
     if (req.path.includes('/avatars/')) {
-      const customer = await prisma.customer.findFirst({
-        where: {
-          // Fix: Use email or another field to find customer
-          email: req.user.email,
-        },
-        select: {
-          id: true,
-          email: true,
-        },
-      });
-
-      if (!customer) {
-        logger.warn('Avatar access for non-existent customer', {
-          filename,
+      if (!isAdmin) {
+        logger.warn('Non-admin avatar access attempt', {
           userId: req.user.userId,
+          role: req.user.role,
         });
-        res.status(404).json({ error: 'File not found' });
-        return;
-      }
-
-      const ownsAvatar = customer.email === req.user.email;
-      
-      if (!isAdmin && !ownsAvatar) {
-        logger.warn('Unauthorized avatar access attempt', {
-          filename,
-          userId: req.user.userId,
-          ownerEmail: customer.email,
-        });
-        res.status(403).json({ error: 'Access denied' });
+        res.status(403).json({ error: 'Admin access required' });
         return;
       }
     }
 
-    // Documents - admin only
     if (req.path.includes('/documents/')) {
       if (!isAdmin) {
         logger.warn('Non-admin document access attempt', {
@@ -286,10 +248,10 @@ export const optionalAuth = async (
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, role: true, isActive: true }, // Fix: Use isActive instead of status
+      select: { id: true, email: true, role: true, isActive: true }, 
     });
 
-    if (user && user.isActive) { // Fix: Use isActive boolean
+    if (user && user.isActive) { 
       req.user = {
         userId: user.id,
         email: user.email,

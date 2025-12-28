@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import prisma from '../../config/database';
-import { UserRole } from '@prisma/client';
+import { UserRole, Prisma } from '@prisma/client';
 
 export class PaymentService {
   private readonly paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
@@ -179,19 +179,33 @@ export class PaymentService {
     }
   }
 
+  
   async handleWebhook(payload: any, signature: string) {
+    
     if (!signature) {
-      logger.warn('Webhook received without signature');
+      logger.warn('Webhook received without signature', { ip: req?.ip });
       throw new AppError(401, 'Missing webhook signature');
+    }
+
+    if (!payload || !payload.event || !payload.data) {
+      logger.warn('Invalid webhook payload structure');
+      throw new AppError(400, 'Invalid payload');
+    }
+
+    const rawBody = (req as any).rawBody; 
+    
+    if (!rawBody) {
+      logger.error('Raw body not available for webhook verification');
+      throw new AppError(500, 'Server configuration error');
     }
 
     const hash = crypto
       .createHmac('sha512', this.paystackSecretKey)
-      .update(JSON.stringify(payload))
+      .update(rawBody)  
       .digest('hex');
 
-    const signatureBuffer = Buffer.from(signature);
-    const hashBuffer = Buffer.from(hash);
+    const signatureBuffer = Buffer.from(signature, 'utf8');
+    const hashBuffer = Buffer.from(hash, 'utf8');
 
     if (signatureBuffer.length !== hashBuffer.length) {
       logger.warn('Invalid webhook signature length', {
@@ -202,16 +216,43 @@ export class PaymentService {
     }
 
     if (!crypto.timingSafeEqual(signatureBuffer, hashBuffer)) {
-      logger.warn('Invalid webhook signature received');
+      logger.warn('Invalid webhook signature', {
+        event: payload.event,
+        signaturePrefix: signature.substring(0, 10),
+      });
       throw new AppError(401, 'Invalid webhook signature');
     }
 
-    const event = payload.event;
-    const data = payload.data;
+    const { event, data } = payload;
+    const reference = data.reference;
 
-    logger.info(`Webhook received: ${event}`, {
-      reference: data.reference,
-    });
+    const idempotencyKey = `webhook:${event}:${reference}`;
+    const alreadyProcessed = await redis.get(idempotencyKey);
+
+    if (alreadyProcessed) {
+      logger.info('Duplicate webhook ignored', { event, reference });
+      return { message: 'Webhook already processed', event };
+    }
+
+    if (data.paid_at) {
+      const paidAt = new Date(data.paid_at);
+      const now = new Date();
+      const hoursDiff = (now.getTime() - paidAt.getTime()) / (1000 * 60 * 60);
+
+      if (hoursDiff > 24) {
+        logger.warn('Webhook timestamp too old', {
+          event,
+          reference,
+          paidAt: paidAt.toISOString(),
+          hoursDiff,
+        });
+        throw new AppError(400, 'Webhook timestamp expired');
+      }
+    }
+
+    await redis.setex(idempotencyKey, 86400, '1');
+
+    logger.info(`Webhook received: ${event}`, { reference });
 
     try {
       switch (event) {
@@ -238,6 +279,9 @@ export class PaymentService {
       return { message: 'Webhook processed', event };
     } catch (error) {
       logger.error('Webhook processing error:', error);
+      
+      await redis.del(idempotencyKey);
+      
       throw error;
     }
   }
@@ -268,16 +312,15 @@ export class PaymentService {
     }
 
     await prisma.$transaction(async (tx) => {
-      // Fix: Remove paidAt field as it doesn't exist in schema
-      // Use updatedAt to track when payment was completed
-      await tx.order.update({
-        where: { id: orderId },
-        data: {
-          status: 'COMPLETED',
-          paymentReference: data.reference,
-          paymentChannel: data.channel,
-          updatedAt: new Date(), // Track completion time
-        },
+        await tx.order.update({
+          where: { id: orderId },
+          data: {
+            status: 'COMPLETED',
+            paymentReference: data.reference,
+            paymentChannel: data.channel,
+            paidAt: new Date(), 
+          },
+
       });
 
       await tx.customer.update({
@@ -366,44 +409,60 @@ export class PaymentService {
       reason: data.gateway_response,
     });
   }
-
   async getTransactions(page = 1, limit = 20) {
-    const skip = (page - 1) * limit;
+    
+    const safePage = Math.max(1, Math.floor(page));
+    const safeLimit = Math.min(100, Math.max(1, Math.floor(limit)));
+    const skip = (safePage - 1) * safeLimit;
 
-    const [transactions, total] = await Promise.all([
-      prisma.order.findMany({
-        where: {
-          status: { in: ['COMPLETED', 'PENDING'] },
-        },
-        skip,
-        take: Math.min(limit, 100),
-        orderBy: { updatedAt: 'desc' }, // Fix: Use updatedAt instead of paidAt
-        include: {
-          customer: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              email: true,
+    const where: Prisma.OrderWhereInput = {
+      status: { in: ['COMPLETED', 'PENDING'] },
+      paidAt: { not: null }, 
+    };
+
+    try {
+      const [transactions, total] = await Promise.all([
+        prisma.order.findMany({
+          where,
+          skip,
+          take: safeLimit,
+          orderBy: { paidAt: 'desc' },
+          include: {
+            customer: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                phone: true,
+              },
             },
           },
-        },
-      }),
-      prisma.order.count({
-        where: {
-          status: { in: ['COMPLETED', 'PENDING'] },
-        },
-      }),
-    ]);
+        }),
+        prisma.order.count({ where }),
+      ]);
 
-    return {
-      transactions,
-      pagination: {
-        page,
-        limit,
+      logger.info('Transactions fetched', {
+        page: safePage,
+        limit: safeLimit,
         total,
-        pages: Math.ceil(total / limit),
-      },
-    };
+        returned: transactions.length,
+      });
+
+      return {
+        transactions,
+        pagination: {
+          page: safePage,
+          limit: safeLimit,
+          total,
+          pages: Math.ceil(total / safeLimit),
+          hasNext: skip + safeLimit < total,
+          hasPrev: safePage > 1,
+        },
+      };
+    } catch (error) {
+      logger.error('Failed to fetch transactions:', error);
+      throw new AppError(500, 'Failed to retrieve transaction history');
+    }
   }
 }

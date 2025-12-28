@@ -142,29 +142,65 @@ export class AdvancedSettingsService {
     return sessions;
   }
 
-  /**
-   * Terminate session
-   */
+ 
   async terminateSession(sessionId: string, userId: string) {
     const session = await prisma.activeSession.findFirst({
       where: { id: sessionId, userId },
+      include: { user: { select: { email: true } } },
     });
 
     if (!session) {
       throw new AppError(404, 'Session not found');
     }
 
+    // ✅ 1. Blacklist the token
+    const tokenExp = Math.floor(session.expiresAt.getTime() / 1000);
+    const now = Math.floor(Date.now() / 1000);
+    const ttl = Math.max(0, tokenExp - now);
+
+    if (ttl > 0) {
+      await blacklistToken(session.token, ttl);
+    }
+
+    // ✅ 2. Delete from database
     await prisma.activeSession.delete({
       where: { id: sessionId },
     });
 
-    logger.info(`Session terminated: ${sessionId}`);
+    // ✅ 3. Notify user via WebSocket (if connected)
+    try {
+      emitToUser(userId, 'session:terminated', {
+        sessionId,
+        device: session.device,
+        terminatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      // Non-critical if notification fails
+      logger.debug('Failed to send session termination notification', { error });
+    }
+
+    // ✅ 4. Audit log
+    await prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'SESSION_TERMINATED',
+        entity: 'SESSION',
+        entityId: sessionId,
+        details: {
+          device: session.device,
+          ipAddress: session.ipAddress,
+        },
+      },
+    });
+
+    logger.info(`Session terminated: ${sessionId}`, {
+      userId,
+      device: session.device,
+    });
+
     return { message: 'Session terminated successfully' };
   }
 
-  /**
-   * Terminate all sessions except current
-   */
   async terminateAllSessions(userId: string, exceptSessionId?: string) {
     const where: any = { userId };
     if (exceptSessionId) {
@@ -177,9 +213,7 @@ export class AdvancedSettingsService {
     return { message: `${result.count} sessions terminated` };
   }
 
-  /**
-   * Helper: Get default settings
-   */
+
   private async getDefaultSettings() {
     return {
       businessName: 'JGPNR Paintball',
@@ -194,9 +228,6 @@ export class AdvancedSettingsService {
     };
   }
 
-  /**
-   * Helper: Create default settings
-   */
   private async createDefaultSettings() {
     return await prisma.systemSettings.create({
       data: {

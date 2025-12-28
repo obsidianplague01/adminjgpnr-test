@@ -119,6 +119,41 @@ const startServer = async () => {
   }
 };
 
+const validateSecrets = () => {
+  const secrets = {
+    JWT_SECRET: process.env.JWT_SECRET,
+    JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
+    QR_ENCRYPTION_KEY: process.env.QR_ENCRYPTION_KEY,
+  };
+
+  for (const [name, value] of Object.entries(secrets)) {
+    if (!value) {
+      logger.error(`Missing required secret: ${name}`);
+      process.exit(1);
+    }
+
+    // ✅ Validate length
+    if (value.length < 32) {
+      logger.error(`Secret ${name} too short (minimum 32 characters)`);
+      process.exit(1);
+    }
+
+    // ✅ Validate entropy
+    const uniqueChars = new Set(value.split('')).size;
+    if (uniqueChars < 16) {
+      logger.error(`Secret ${name} has insufficient entropy`);
+      process.exit(1);
+    }
+
+    // ✅ Warn if weak
+    if (/^[a-z0-9]+$/i.test(value)) {
+      logger.warn(`Secret ${name} should contain special characters`);
+    }
+  }
+
+  logger.info('All secrets validated');
+};
+
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
@@ -128,4 +163,5 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
+validateSecrets();
 startServer();

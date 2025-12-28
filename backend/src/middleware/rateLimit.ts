@@ -1,5 +1,6 @@
 // src/middleware/rateLimit.ts 
 import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
+
 import RedisStore from 'rate-limit-redis';
 import { createClient } from 'redis';
 import { Request, Response } from 'express';
@@ -36,7 +37,6 @@ declare module 'express' {
   }
 }
 
-// Fix: Pass sendCommand directly instead of client
 const createRedisStore = (prefix: string) => {
   return new RedisStore({
     sendCommand: (...args: string[]) => redisClient.sendCommand(args),
@@ -65,22 +65,69 @@ export const apiLimiter: RateLimitRequestHandler = rateLimit({
 });
 
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
+  windowMs: 15 * 60 * 1000,  
+  max: 5,                    
   skipSuccessfulRequests: true,
-  message: 'Too many login attempts, please try again later',
+  message: 'Too many login attempts. Please try again in 15 minutes.',
   standardHeaders: true,
   legacyHeaders: false,
   store: createRedisStore('auth'),
   handler: (req: Request, res: Response) => {
-    logger.warn(`Auth rate limit exceeded: ${req.ip}`);
+    logger.warn(`Auth rate limit exceeded: ${req.ip}`, {
+      email: req.body.email,
+      userAgent: req.get('user-agent'),
+    });
     res.status(429).json({
       error: 'Too many authentication attempts',
       message: 'Please try again in 15 minutes',
+      retryAfter: Math.ceil((req.rateLimit?.resetTime?.getTime() || Date.now()) / 1000),
     });
   },
 });
 
+export const accountLockout = async (
+  email: string,
+  success: boolean
+): Promise<{ locked: boolean; remainingAttempts?: number; unlockAt?: Date }> => {
+  const key = `account:lockout:${email.toLowerCase()}`;
+  
+  if (success) {
+    // Clear failed attempts on successful login
+    await redis.del(key);
+    return { locked: false };
+  }
+
+  // Increment failed attempts
+  const attempts = await redis.incr(key);
+  
+  // Set expiry on first attempt
+  if (attempts === 1) {
+    await redis.expire(key, 3600); // 1 hour window
+  }
+
+  // Lock account after 10 failed attempts
+  if (attempts >= 10) {
+    const ttl = await redis.ttl(key);
+    const unlockAt = new Date(Date.now() + ttl * 1000);
+    
+    logger.warn('Account locked due to failed login attempts', {
+      email,
+      attempts,
+      unlockAt: unlockAt.toISOString(),
+    });
+
+    return {
+      locked: true,
+      remainingAttempts: 0,
+      unlockAt,
+    };
+  }
+
+  return {
+    locked: false,
+    remainingAttempts: 10 - attempts,
+  };
+};
 export const emailLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 100,
@@ -139,3 +186,12 @@ export const closeRateLimiter = async () => {
     logger.error('Error closing rate limiter Redis:', error);
   }
 };
+export const fileDownloadLimiter = rateLimit({
+  windowMs: 60 * 1000, 
+  max: 30, 
+  message: 'Too many file download requests',
+  store: createRedisStore('file-download'),
+  keyGenerator: (req: Request) => {
+    return req.user?.userId || req.ip || 'unknown';
+  },
+});
