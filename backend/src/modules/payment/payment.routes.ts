@@ -6,38 +6,34 @@ import { paymentLimiter } from '../../middleware/rateLimit';
 import { auditLog } from '../../middleware/audit';
 import rateLimit from 'express-rate-limit';
 
+
 const router = Router();
 
-// Webhook rate limiter (prevent DoS)
 const webhookLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 50, // 50 requests per minute
+  windowMs: 60 * 1000, 
+  max: 50, 
   message: 'Too many webhook requests',
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (_req, res) => { // Fix: Prefix req with underscore
+  handler: (_req, res) => { 
     res.status(429).json({
       error: 'Too many webhook requests',
-      message: 'Please slow down',
+      message: 'slow down',
     });
   },
 });
 
-// Webhook (no auth - verified by signature, but rate limited)
 router.post('/webhook', webhookLimiter, paymentController.handleWebhook);
 
-// Protected routes - require staff (not just admin)
 router.use(authenticateJWT, requireStaff);
 
-// Initialize payment with strict rate limiting
 router.post(
   '/initialize/:orderId',
-  paymentLimiter, // 10 requests per hour per user
+  paymentLimiter, 
   auditLog('INITIALIZE_PAYMENT', 'PAYMENT'),
   paymentController.initializePayment
 );
 
-// Verify payment with moderate rate limiting
 router.get(
   '/verify/:reference',
   paymentLimiter,

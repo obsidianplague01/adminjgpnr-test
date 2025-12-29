@@ -154,6 +154,72 @@ const validateSecrets = () => {
   logger.info('All secrets validated');
 };
 
+const validateEnvironment = () => {
+  const errors: string[] = [];
+  
+  // Required variables
+  const required = [
+    'DATABASE_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET',
+    'SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD',
+    'QR_ENCRYPTION_KEY', 'REDIS_HOST', 'PAYSTACK_SECRET_KEY'
+  ];
+  
+  for (const varName of required) {
+    if (!process.env[varName]) {
+      errors.push(`Missing required variable: ${varName}`);
+    }
+  }
+  
+  // Validate JWT secrets (min 32 chars, high entropy)
+  const secrets = ['JWT_SECRET', 'JWT_REFRESH_SECRET'];
+  for (const secret of secrets) {
+    const value = process.env[secret];
+    if (value) {
+      if (value.length < 32) {
+        errors.push(`${secret} must be at least 32 characters`);
+      }
+      if (new Set(value).size < 16) {
+        errors.push(`${secret} has insufficient entropy`);
+      }
+      if (value === 'your_jwt_secret_key_here') {
+        errors.push(`${secret} must be changed from placeholder`);
+      }
+    }
+  }
+  
+  // Validate QR encryption key (must be 64 char hex)
+  const qrKey = process.env.QR_ENCRYPTION_KEY;
+  if (qrKey) {
+    if (!/^[0-9a-fA-F]{64}$/.test(qrKey)) {
+      errors.push('QR_ENCRYPTION_KEY must be 64 character hex string');
+    }
+  }
+  
+  // Validate BCRYPT_ROUNDS
+  const rounds = parseInt(process.env.BCRYPT_ROUNDS || '14');
+  if (rounds < 12 || rounds > 16) {
+    errors.push('BCRYPT_ROUNDS must be between 12 and 16');
+  }
+  
+  // Validate CORS origins
+  const origins = process.env.CORS_ORIGIN?.split(',') || [];
+  for (const origin of origins) {
+    try {
+      new URL(origin);
+    } catch {
+      errors.push(`Invalid CORS origin: ${origin}`);
+    }
+  }
+  
+  if (errors.length > 0) {
+    logger.error('Environment validation failed:', errors);
+    throw new Error(`Environment validation failed:\n${errors.join('\n')}`);
+  }
+  
+  logger.info('Environment validation passed');
+};
+
+
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
@@ -163,5 +229,6 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
+validateEnvironment();
 validateSecrets();
 startServer();

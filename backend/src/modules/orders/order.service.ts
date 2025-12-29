@@ -1,5 +1,5 @@
 // src/modules/orders/order.service.ts
-import { OrderStatus, Prisma, UserRole } from '@prisma/client';
+import { OrderStatus, Prisma, UserRole, TicketStatus } from '@prisma/client';
 import prisma from '../../config/database';
 import { AppError } from '../../middleware/errorHandler';
 import { monitoring } from '../../utils/monitoring.service';
@@ -13,9 +13,15 @@ import { TicketService } from '../tickets/ticket.service';
 import { emailQueue } from '../../config/queue';
 import { logger } from '../../utils/logger';
 import { invalidateCache } from '../../middleware/cache';
+import { immutableAuditService } from '../../services/immutableAudit.service';
+import { geolocationService } from '../../utils/geolocation';
 import crypto from 'crypto';
+import QRCode from 'qrcode';
+import path from 'path';
+import fs from 'fs/promises';
 
 const ticketService = new TicketService();
+
 function generateSecureCode(length: number, charset: string): string {
   const result: string[] = [];
   const randomBytes = crypto.randomBytes(length * 2); // Extra bytes for safety
@@ -29,16 +35,43 @@ function generateSecureCode(length: number, charset: string): string {
     cursor++;
   }
   
+  if (result.length < length) {
+    throw new Error('Failed to generate secure code');
+  }
+  
   return result.join('');
 }
+
 export class OrderService {
-  
- private generateOrderNumber(): string {
-  const timestamp = Date.now().toString(36).toUpperCase(); // Base36 timestamp
-  const random = crypto.randomBytes(4).toString('hex').toUpperCase();
-  return `ORD-${timestamp}-${random}`;
-}
-  async createOrder(data: CreateOrderInput) {
+  private readonly qrCodeDir = path.join(process.cwd(), 'uploads', 'qrcodes');
+
+  constructor() {
+   
+    this.ensureQRDirectory();
+  }
+
+
+  private async ensureQRDirectory() {
+    try {
+      await fs.mkdir(this.qrCodeDir, { recursive: true });
+    } catch (error) {
+      logger.error('Failed to create QR directory:', error);
+    }
+  }
+
+  private generateOrderNumber(): string {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = crypto.randomBytes(6).toString('hex').toUpperCase();
+    return `ORD-${timestamp}-${random}`;
+  }
+
+  private generateTicketCode(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed ambiguous: 0,O,1,I
+    const code = generateSecureCode(8, chars);
+    return `JGPNR-${code}`;
+  }
+
+  async createOrder(data: CreateOrderInput, ipAddress?: string, userId?: string) {
     const start = Date.now();
     
     monitoring.addBreadcrumb('Creating order', {
@@ -47,6 +80,7 @@ export class OrderService {
     });
 
     try {
+      // Validate customer exists
       const customer = await prisma.customer.findUnique({
         where: { id: data.customerId },
       });
@@ -54,77 +88,100 @@ export class OrderService {
       if (!customer) {
         throw new AppError(404, 'Customer not found');
       }
-      
-      // FIXED: Moved order number generation inside transaction to prevent race conditions
-      const order = await prisma.$transaction(async (tx) => {
-        // Generate unique order number with retry logic inside transaction
-        let orderNumber: string;
-        let attempts = 0;
-        const maxAttempts = 5;
-        
-        do {
-          orderNumber = this.generateOrderNumber();
-          
-          const existing = await tx.order.findUnique({
-            where: { orderNumber },
+
+      // Get geolocation if IP provided
+      const location = ipAddress 
+        ? await geolocationService.getLocation(ipAddress)
+        : null;
+
+      // Get ticket settings
+      const settings = await ticketService.getSettings();
+
+      // Create order with retry logic OUTSIDE transaction
+      let order;
+      let attempts = 0;
+      const maxAttempts = 3;
+
+      while (attempts < maxAttempts) {
+        try {
+          const orderNumber = this.generateOrderNumber();
+
+          order = await prisma.$transaction(async (tx) => {
+            // Create the order
+            const newOrder = await tx.order.create({
+              data: {
+                orderNumber,
+                customerId: data.customerId,
+                quantity: data.quantity,
+                amount: data.amount,
+                status: OrderStatus.PENDING,
+                paymentStatus: 'pending',
+                purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : new Date(),
+              },
+              include: {
+                customer: true,
+              },
+            });
+
+            // Create tickets for this order
+            const tickets = [];
+            
+            for (let i = 0; i < data.quantity; i++) {
+              const ticketCode = this.generateTicketCode();
+              const validUntil = this.addDays(new Date(), settings.validityDays);
+
+              const ticket = await tx.ticket.create({
+                data: {
+                  ticketCode,
+                  orderId: newOrder.id,
+                  gameSession: data.gameSession,
+                  validUntil,
+                  maxScans: settings.maxScanCount,
+                  scanWindow: settings.scanWindowDays,
+                  status: TicketStatus.PENDING, // Pending until payment
+                },
+              });
+
+              tickets.push(ticket);
+            }
+
+            return { ...newOrder, tickets };
+          }, {
+            timeout: 10000, // 10 second timeout
+            isolationLevel: 'Serializable'
           });
-          
-          if (!existing) break;
-          
+
+          // Success - break the retry loop
+          break;
+
+        } catch (error: any) {
           attempts++;
-          
-          // Add small delay to reduce collision probability
-          await new Promise(resolve => setTimeout(resolve, 10));
-          
-        } while (attempts < maxAttempts);
 
-        if (attempts === maxAttempts) {
-          throw new AppError(500, 'Failed to generate unique order number');
+          // If unique constraint violation, retry with exponential backoff
+          if (error.code === 'P2002' && attempts < maxAttempts) {
+            const backoffMs = Math.pow(2, attempts) * 100;
+            logger.warn(`Order number collision, retrying in ${backoffMs}ms (attempt ${attempts}/${maxAttempts})`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            continue;
+          }
+
+          // If max attempts reached or different error, throw
+          throw error.code === 'P2002'
+            ? new AppError(500, 'Failed to generate unique order number after multiple attempts')
+            : error;
         }
+      }
 
-        // Create order
-        const newOrder = await tx.order.create({
-          data: {
-            orderNumber,
-            customerId: data.customerId,
-            quantity: data.quantity,
-            amount: data.amount,
-            status: OrderStatus.PENDING,
-            purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : new Date(),
-          },
-          include: {
-            customer: true,
-          },
-        });
+      if (!order) {
+        throw new AppError(500, 'Order creation failed');
+      }
 
-        // Create tickets for this order
-        const tickets = [];
-        const settings = await ticketService.getSettings();
-        
-        for (let i = 0; i < data.quantity; i++) {
-          const ticketCode = this.generateTicketCode();
-          const validUntil = this.addDays(new Date(), settings.validityDays);
-
-          const ticket = await tx.ticket.create({
-            data: {
-              ticketCode,
-              orderId: newOrder.id,
-              gameSession: data.gameSession,
-              validUntil,
-              maxScans: settings.maxScanCount,
-              scanWindow: settings.scanWindowDays,
-            },
-          });
-
-          tickets.push(ticket);
-        }
-
-        return { ...newOrder, tickets };
-      });
-
-      // Invalidate related caches (outside transaction)
-      await invalidateCache('api:/analytics/*');
-      await invalidateCache('api:/orders*');
+      // Invalidate relevant caches
+      await Promise.all([
+        invalidateCache('api:/analytics/*'),
+        invalidateCache('api:/orders*'),
+        invalidateCache(`api:/customers/${customer.id}*`)
+      ]);
 
       // Queue confirmation email
       await emailQueue.add('order-confirmation', {
@@ -133,11 +190,33 @@ export class OrderService {
         orderNumber: order.orderNumber,
       });
 
-      logger.info(`Order created: ${order.orderNumber} for customer ${customer.email}`);
+      // Log in immutable audit
+      await immutableAuditService.createLog({
+        userId,
+        action: 'ORDER_CREATED',
+        entity: 'ORDER',
+        entityId: order.id,
+        ipAddress,
+        metadata: {
+          orderNumber: order.orderNumber,
+          customerId: customer.id,
+          customerEmail: customer.email,
+          quantity: data.quantity,
+          amount: data.amount,
+          location,
+          ticketCodes: order.tickets.map((t: any) => t.ticketCode)
+        }
+      });
+
+      logger.info(`Order created: ${order.orderNumber} for customer ${customer.email}`, {
+        orderId: order.id,
+        ticketCount: order.tickets.length
+      });
       
       monitoring.trackPerformance('createOrder', Date.now() - start);
       
       return order;
+
     } catch (error) {
       monitoring.captureException(error as Error, {
         operation: 'createOrder',
@@ -147,9 +226,6 @@ export class OrderService {
     }
   }
 
-  /**
-   * List orders with filters
-   */
   async listOrders(filters: ListOrdersInput) {
     const page = filters.page || 1;
     const limit = Math.min(filters.limit || 20, 100);
@@ -214,6 +290,7 @@ export class OrderService {
               ticketCode: true,
               status: true,
               scanCount: true,
+              maxScans: true,
             },
           },
         },
@@ -232,9 +309,6 @@ export class OrderService {
     };
   }
 
-  /**
-   * Get order by ID
-   */
   async getOrder(orderId: string) {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -244,7 +318,7 @@ export class OrderService {
           include: {
             scanHistory: {
               orderBy: { scannedAt: 'desc' },
-              take: 5,
+              take: 10,
             },
           },
         },
@@ -258,9 +332,6 @@ export class OrderService {
     return order;
   }
 
-  /**
-   * Get order by order number
-   */
   async getOrderByNumber(orderNumber: string) {
     const order = await prisma.order.findUnique({
       where: { orderNumber },
@@ -277,10 +348,16 @@ export class OrderService {
     return order;
   }
 
-  /**
-   * Update order
-   */
-  async updateOrder(orderId: string, data: UpdateOrderInput) {
+  async updateOrder(orderId: string, data: UpdateOrderInput, userId?: string, ipAddress?: string) {
+    const existingOrder = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { orderNumber: true, status: true, amount: true }
+    });
+
+    if (!existingOrder) {
+      throw new AppError(404, 'Order not found');
+    }
+
     const order = await prisma.order.update({
       where: { id: orderId },
       data,
@@ -290,14 +367,32 @@ export class OrderService {
       },
     });
 
-    logger.info(`Order updated: ${order.orderNumber}`);
+    // Log in immutable audit
+    await immutableAuditService.createLog({
+      userId,
+      action: 'ORDER_UPDATED',
+      entity: 'ORDER',
+      entityId: orderId,
+      ipAddress,
+      changes: {
+        from: existingOrder,
+        to: { status: order.status, amount: order.amount }
+      }
+    });
+
+    logger.info(`Order updated: ${order.orderNumber}`, { orderId, changes: data });
+    
+    await invalidateCache(`api:/orders/${orderId}*`);
+    
     return order;
   }
 
-  /**
-   * Confirm payment and activate tickets - FIXED: Notification user ID
-   */
-  async confirmPayment(orderId: string, data: ConfirmPaymentInput) {
+  async confirmPayment(
+    orderId: string, 
+    data: ConfirmPaymentInput,
+    userId?: string,
+    ipAddress?: string
+  ) {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
@@ -314,13 +409,18 @@ export class OrderService {
       throw new AppError(400, 'Order already completed');
     }
 
-    // Update order and customer in transaction
+    // Update order and activate tickets in transaction
     const updatedOrder = await prisma.$transaction(async (tx) => {
       // Update order status
       const updated = await tx.order.update({
         where: { id: orderId },
         data: {
           status: OrderStatus.COMPLETED,
+          paymentStatus: 'paid',
+          paidAt: new Date(),
+          paidAmount: data.paidAmount,
+          paymentReference: data.paymentReference,
+          paymentMethod: data.paymentMethod,
         },
         include: {
           customer: true,
@@ -338,22 +438,30 @@ export class OrderService {
         },
       });
 
-      // Generate QR codes for tickets (if not already done)
+      // Activate tickets and generate QR codes
+      const activatedTickets = [];
       for (const ticket of order.tickets) {
-        if (!ticket.qrCodePath) {
-          try {
-            const qrPath = await this.generateQRForTicket(ticket, order);
-            await tx.ticket.update({
-              where: { id: ticket.id },
-              data: { qrCodePath: qrPath },
-            });
-          } catch (error) {
-            logger.error(`QR generation failed for ticket ${ticket.id}:`, error);
-          }
+        try {
+          // Generate QR code
+          const qrPath = await this.generateQRForTicket(ticket, order);
+          
+          // Update ticket status to ACTIVE
+          const activatedTicket = await tx.ticket.update({
+            where: { id: ticket.id },
+            data: { 
+              status: TicketStatus.ACTIVE,
+              qrCodePath: qrPath 
+            },
+          });
+          
+          activatedTickets.push(activatedTicket);
+        } catch (error) {
+          logger.error(`Failed to activate ticket ${ticket.id}:`, error);
+          throw new AppError(500, `Failed to activate ticket ${ticket.ticketCode}`);
         }
       }
 
-      // FIXED: Send notification to admins, not customers
+      // Create notifications for admins
       const admins = await tx.user.findMany({
         where: {
           role: { in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
@@ -362,7 +470,7 @@ export class OrderService {
         select: { id: true },
       });
 
-      // Create notifications for all admins
+      // Notify all admins
       for (const admin of admins) {
         await tx.notification.create({
           data: {
@@ -374,7 +482,7 @@ export class OrderService {
         });
       }
 
-      return updated;
+      return { ...updated, tickets: activatedTickets };
     });
 
     // Queue receipt email
@@ -383,20 +491,49 @@ export class OrderService {
       customerEmail: order.customer.email,
       orderNumber: updatedOrder.orderNumber,
       paymentReference: data.paymentReference,
+      tickets: updatedOrder.tickets,
     });
 
-    logger.info(`Payment confirmed for order: ${order.orderNumber}`);
+    // Log in immutable audit
+    await immutableAuditService.createLog({
+      userId,
+      action: 'PAYMENT_CONFIRMED',
+      entity: 'ORDER',
+      entityId: orderId,
+      ipAddress,
+      metadata: {
+        orderNumber: order.orderNumber,
+        paymentReference: data.paymentReference,
+        amount: data.paidAmount,
+        paymentMethod: data.paymentMethod,
+        customerId: order.customerId,
+        ticketsActivated: updatedOrder.tickets.length
+      }
+    });
+
+    logger.info(`Payment confirmed for order: ${order.orderNumber}`, {
+      orderId,
+      amount: data.paidAmount,
+      ticketsActivated: updatedOrder.tickets.length
+    });
+
+    // Invalidate caches
+    await Promise.all([
+      invalidateCache(`api:/orders/${orderId}*`),
+      invalidateCache('api:/analytics/*'),
+      invalidateCache(`api:/customers/${order.customerId}*`)
+    ]);
 
     return updatedOrder;
   }
 
-  /**
-   * Cancel order
-   */
-  async cancelOrder(orderId: string) {
+  async cancelOrder(orderId: string, reason?: string, userId?: string, ipAddress?: string) {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      include: { tickets: true },
+      include: { 
+        tickets: true,
+        customer: true 
+      },
     });
 
     if (!order) {
@@ -404,30 +541,55 @@ export class OrderService {
     }
 
     if (order.status === OrderStatus.COMPLETED) {
-      throw new AppError(400, 'Cannot cancel completed order');
+      throw new AppError(400, 'Cannot cancel completed order. Please process a refund instead.');
     }
 
     // Cancel order and all tickets
     await prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: orderId },
-        data: { status: OrderStatus.CANCELLED },
+        data: { 
+          status: OrderStatus.CANCELLED,
+          paymentStatus: 'cancelled'
+        },
       });
 
       await tx.ticket.updateMany({
         where: { orderId },
-        data: { status: 'CANCELLED' },
+        data: { status: TicketStatus.CANCELLED },
       });
     });
 
-    logger.info(`Order cancelled: ${order.orderNumber}`);
+    // Send cancellation email
+    await emailQueue.add('order-cancelled', {
+      orderId,
+      customerEmail: order.customer.email,
+      orderNumber: order.orderNumber,
+      reason,
+    });
+
+    // Log in immutable audit
+    await immutableAuditService.createLog({
+      userId,
+      action: 'ORDER_CANCELLED',
+      entity: 'ORDER',
+      entityId: orderId,
+      ipAddress,
+      metadata: {
+        orderNumber: order.orderNumber,
+        reason,
+        customerId: order.customerId,
+        ticketsCancelled: order.tickets.length
+      }
+    });
+
+    logger.info(`Order cancelled: ${order.orderNumber}`, { orderId, reason });
+
+    await invalidateCache(`api:/orders/${orderId}*`);
 
     return { message: 'Order cancelled successfully' };
   }
 
-  /**
-   * Get order statistics
-   */
   async getOrderStats(startDate?: string, endDate?: string) {
     const where: Prisma.OrderWhereInput = {};
 
@@ -457,21 +619,140 @@ export class OrderService {
     };
   }
 
-  // Helper methods
- private generateTicketCode(): string {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed ambiguous chars: 0,O,1,I
-    return generateSecureCode(8, chars);
+  private async generateQRForTicket(ticket: any, order: any): Promise<string> {
+    try {
+      await this.ensureQRDirectory();
+
+      // Create encrypted QR data
+      const qrData = JSON.stringify({
+        ticketCode: ticket.ticketCode,
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        validUntil: ticket.validUntil,
+        maxScans: ticket.maxScans,
+        gameSession: ticket.gameSession,
+        issued: new Date().toISOString()
+      });
+
+      // Encrypt the QR data
+      const encryptedData = this.encryptQRData(qrData);
+
+      // Generate QR code
+      const qrFileName = `${ticket.ticketCode}.png`;
+      const qrFilePath = path.join(this.qrCodeDir, qrFileName);
+
+      await QRCode.toFile(qrFilePath, encryptedData, {
+        errorCorrectionLevel: 'H',
+        width: 400,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF'
+        }
+      });
+
+      logger.info(`QR code generated for ticket ${ticket.ticketCode}`);
+
+      // Return relative path for database storage
+      return `/uploads/qrcodes/${qrFileName}`;
+
+    } catch (error) {
+      logger.error(`QR generation failed for ticket ${ticket.ticketCode}:`, error);
+      throw new AppError(500, 'Failed to generate QR code');
+    }
   }
 
+  private encryptQRData(data: string): string {
+    const algorithm = 'aes-256-gcm';
+    const key = Buffer.from(process.env.QR_ENCRYPTION_KEY!, 'hex');
+    const iv = crypto.randomBytes(16);
 
+    const cipher = crypto.createCipheriv(algorithm, key, iv);
+    
+    let encrypted = cipher.update(data, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    
+    const authTag = cipher.getAuthTag();
+
+    // Combine IV + Auth Tag + Encrypted Data
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  }
+
+  public decryptQRData(encryptedData: string): string {
+    try {
+      const algorithm = 'aes-256-gcm';
+      const key = Buffer.from(process.env.QR_ENCRYPTION_KEY!, 'hex');
+      
+      const [ivHex, authTagHex, encrypted] = encryptedData.split(':');
+      
+      const iv = Buffer.from(ivHex, 'hex');
+      const authTag = Buffer.from(authTagHex, 'hex');
+
+      const decipher = crypto.createDecipheriv(algorithm, key, iv);
+      decipher.setAuthTag(authTag);
+
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      return decrypted;
+    } catch (error) {
+      logger.error('QR decryption failed:', error);
+      throw new AppError(400, 'Invalid QR code');
+    }
+  }
+
+ 
   private addDays(date: Date, days: number): Date {
     const result = new Date(date);
     result.setDate(result.getDate() + days);
     return result;
   }
 
-  private async generateQRForTicket(ticket: any, _order: any): Promise<string> {
-    
-    return `/qrcodes/${ticket.ticketCode}.png`;
+  async getCustomerOrders(customerId: string, limit: number = 10) {
+    return await prisma.order.findMany({
+      where: { customerId },
+      take: limit,
+      orderBy: { purchaseDate: 'desc' },
+      include: {
+        tickets: {
+          select: {
+            id: true,
+            ticketCode: true,
+            status: true,
+            scanCount: true,
+            maxScans: true,
+          }
+        }
+      }
+    });
+  }
+
+  async resendConfirmation(orderId: string, userId?: string, ipAddress?: string) {
+    const order = await this.getOrder(orderId);
+
+    await emailQueue.add('order-confirmation', {
+      orderId: order.id,
+      customerEmail: order.customer.email,
+      orderNumber: order.orderNumber,
+      isResend: true
+    });
+
+    await immutableAuditService.createLog({
+      userId,
+      action: 'ORDER_CONFIRMATION_RESENT',
+      entity: 'ORDER',
+      entityId: orderId,
+      ipAddress,
+      metadata: {
+        orderNumber: order.orderNumber,
+        customerEmail: order.customer.email
+      }
+    });
+
+    logger.info(`Order confirmation resent: ${order.orderNumber}`);
+
+    return { message: 'Confirmation email resent successfully' };
   }
 }
+
+export const orderService = new OrderService();

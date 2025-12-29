@@ -62,10 +62,14 @@ model User {
   notifications Notification[]
   loginActivities LoginActivity[]
   activeSessions  ActiveSession[]
+  loginAttempts Int      @default(0)
+  lockedUntil   DateTime?
   
   @@index([email])
   @@index([role, isActive])
+  @@index([email, lockedUntil])
   @@map("users")
+  
 }
 model AuditLog {
   id           String   @id @default(cuid())

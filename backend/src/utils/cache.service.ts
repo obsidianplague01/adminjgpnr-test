@@ -104,7 +104,7 @@ export class CacheService {
       return null;
     }
   }
-
+  
   
   async set(key: string, value: any, ttl?: number): Promise<boolean> {
     try {
@@ -177,7 +177,6 @@ export class CacheService {
     try {
       let deletedCount = 0;
 
-      // Delete from Redis
       if (this.isRedisHealthy) {
         try {
           const keys = await redis.keys(pattern);
@@ -191,22 +190,27 @@ export class CacheService {
         }
       }
 
-      // Clean DB cache - ✅ FIXED: Use parameterized query
       if (pattern.startsWith('analytics:')) {
         try {
-          // ✅ Use template literal syntax for safe parameterization
-          const likePattern = pattern.replace('*', '%');
+       
+          if (!/^[a-zA-Z0-9:*_-]+$/.test(pattern)) {
+            throw new Error('Invalid cache pattern');
+          }
+          const likePattern = pattern.replace(/\*/g, '%');
+  
           
-          const result = await prisma.$executeRaw`
-            DELETE FROM "AnalyticsCache" WHERE "cacheKey" LIKE ${likePattern}
-          `;
+          const result = await prisma.$executeRawUnsafe(
+            'DELETE FROM "AnalyticsCache" WHERE "cacheKey" LIKE $1',
+            likePattern
+          );
           
           logger.info(`Deleted ${result} DB cache entries matching: ${pattern}`);
+          return Number(result);
         } catch (error) {
           logger.error('DB pattern delete error:', error);
         }
       }
-
+      
       return deletedCount;
     } catch (error) {
       logger.error('Cache pattern delete error:', error);
@@ -242,20 +246,33 @@ export class CacheService {
     );
   }
 
-    
   async getOrSet<T>(
-      key: string,
-      fetcher: () => Promise<T>,
-      ttl?: number
-    ): Promise<T> {
-      const cached = await this.get<T>(key);
-      if (cached !== null) {
-        return cached;
-      }
-
+    key: string,
+    fetcher: () => Promise<T>,
+    ttl?: number
+  ): Promise<T> {
+    const cached = await this.get<T>(key);
+    if (cached !== null) return cached;
+    
+    // Use distributed lock to prevent stampede
+    const lockKey = `lock:${key}`;
+    const lockAcquired = await redis.set(lockKey, '1', 'NX', 'EX', 10);
+    
+    if (!lockAcquired) {
+      // Another process is generating, wait and retry
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const retry = await this.get<T>(key);
+      if (retry) return retry;
+      // If still not available, proceed to generate
+    }
+    
+    try {
       const data = await fetcher();
       await this.set(key, data, ttl);
       return data;
+    } finally {
+      await redis.del(lockKey);
+    }
   }
 
 

@@ -32,15 +32,17 @@ const ensureDir = (dir: string) => {
   }
 };
 
-
 const storage = multer.diskStorage({
   destination: (_req, file, cb) => {
     let uploadPath = 'uploads/documents';
     if (file.fieldname === 'avatar') uploadPath = 'uploads/avatars';
     else if (file.fieldname === 'customerDoc') uploadPath = 'uploads/customer-documents';
     else if (file.fieldname === 'orderDoc') uploadPath = 'uploads/order-documents';
-
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type'), '');
+    }
     try {
+
       ensureDir(uploadPath);
       cb(null, uploadPath);
     } catch (error) {
@@ -52,7 +54,9 @@ const storage = multer.diskStorage({
       const uniqueSuffix = crypto.randomBytes(16).toString('hex');
       const ext = path.extname(file.originalname);
       const sanitizedExt = ext.replace(/[^a-zA-Z0-9.-]/g, '');
-
+      const quarantinePath = 'uploads/quarantine';
+      ensureDir(quarantinePath);
+      cb(null, `quarantine-${Date.now()}-${crypto.randomBytes(16).toString('hex')}`);
       cb(null, `${Date.now()}-${uniqueSuffix}${sanitizedExt}`);
     } catch (error) {
       cb(new Error('Failed to generate filename'), '');
@@ -60,7 +64,26 @@ const storage = multer.diskStorage({
   },
 });
 
-
+export const postUploadValidation = async (
+  req: Request, 
+  res: Response, 
+  next: NextFunction
+) => {
+  if (!req.file) return next();
+  
+  const isValid = await validateUploadedFile(req.file.path);
+  
+  if (!isValid) {
+    await fsPromises.unlink(req.file.path);
+    return res.status(400).json({ error: 'File validation failed' });
+  }
+  
+  const finalPath = req.file.path.replace('quarantine', 'documents');
+  await fsPromises.rename(req.file.path, finalPath);
+  req.file.path = finalPath;
+  
+  next();
+};
 const fileFilter = (
   _req: Request,
   file: Express.Multer.File,

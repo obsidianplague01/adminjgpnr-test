@@ -140,6 +140,7 @@ app.use(`/api/${API_VERSION}/customers`, authenticate, csrfProtection, customerR
 app.use(`/api/${API_VERSION}/email`, authenticate, csrfProtection, emailRoutes);
 app.use(`/api/${API_VERSION}/batch`, authenticate, csrfProtection, batchRoutes);
 
+app.use('/api/payments/webhook', paymentRoutes);
 app.use(`/api/${API_VERSION}/analytics`, authenticate, analyticsRoutes);
 app.use(`/api/${API_VERSION}/notifications`, authenticate, notificationRoutes);
 app.use(`/api/${API_VERSION}/subscribers`, authenticate, subscriberRoutes);

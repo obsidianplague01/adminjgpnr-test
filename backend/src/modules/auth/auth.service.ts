@@ -118,37 +118,31 @@ export class AuthService {
   }
 
   async refreshToken(token: string) {
-    try {
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_REFRESH_SECRET!
-      ) as { userId: string };
-
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-      });
-
-      if (!user || !user.isActive) {
-        throw new AppError(401, 'Invalid refresh token');
-      }
-
-      const payload: JWTPayload = {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-        tokenVersion: user.tokenVersion
-      };
-
-      const accessToken = jwt.sign(
-        payload,
-        process.env.JWT_SECRET!,
-        { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' } as SignOptions
-      );
-
-      return { accessToken };
-    } catch (error) {
+    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET!) as { userId: string };
+    
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+    if (!user || !user.isActive) {
       throw new AppError(401, 'Invalid refresh token');
     }
+    
+    // Blacklist old refresh token
+    const tokenExp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
+    await blacklistToken(token, tokenExp - Math.floor(Date.now() / 1000));
+    
+    // Generate NEW refresh token (rotation)
+    const newRefreshToken = jwt.sign(
+      { userId: user.id },
+      process.env.JWT_REFRESH_SECRET!,
+      { expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d' }
+    );
+    
+    const accessToken = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion },
+      process.env.JWT_SECRET!,
+      { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' }
+    );
+    
+    return { accessToken, refreshToken: newRefreshToken };
   }
 
   async getCurrentUser(userId: string) {
@@ -390,6 +384,18 @@ export class AuthService {
       activity,
     };
   }
+  private async generateBackupCodes(): Promise<{ codes: string[], hashed: string[] }> {
+    const codes: string[] = [];
+    const hashed: string[] = [];
+    
+    for (let i = 0; i < 10; i++) {
+      const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+      codes.push(code);
+      hashed.push(await bcrypt.hash(code, 12));
+    }
+    
+    return { codes, hashed };
+  }
   async enable2FA(userId: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -408,21 +414,15 @@ export class AuthService {
       name: `JGPNR (${user.email})`,
       issuer: 'JGPNR Admin',
     });
-
-    // Generate backup codes
-    const backupCodes = Array.from({ length: 10 }, () =>
-      crypto.randomBytes(4).toString('hex').toUpperCase()
-    );
-
+    
+    const { codes, hashed } = await this.generateBackupCodes();
     await prisma.user.update({
       where: { id: userId },
       data: {
-        twoFactorSecret: secret.base32,
-        twoFactorBackupCodes: JSON.stringify(backupCodes),
+        twoFactorBackupCodes: JSON.stringify(hashed),
       },
     });
-
-    // Generate QR code
+    
     const qrCode = await QRCode.toDataURL(secret.otpauth_url!);
 
     logger.info(`2FA setup initiated for user: ${user.email}`);
@@ -430,7 +430,7 @@ export class AuthService {
     return {
       secret: secret.base32,
       qrCode,
-      backupCodes,
+      backupCodes: codes,
       message: 'Scan QR code with authenticator app and verify',
     };
   }

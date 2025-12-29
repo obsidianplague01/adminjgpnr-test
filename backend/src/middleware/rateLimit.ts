@@ -90,45 +90,47 @@ export const accountLockout = async (
   email: string,
   success: boolean
 ): Promise<{ locked: boolean; remainingAttempts?: number; unlockAt?: Date }> => {
-  const key = `account:lockout:${email.toLowerCase()}`;
+  try {
+    // Try Redis first (fast path)
+    return await redisLockout(email, success);
+  } catch (error) {
+    logger.warn('Redis lockout failed, using database fallback');
+    return await databaseLockout(email, success);
+  }
+};
+
+async function databaseLockout(email: string, success: boolean) {
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { loginAttempts: true, lockedUntil: true }
+  });
+  
+  if (!user) return { locked: false };
   
   if (success) {
-    // Clear failed attempts on successful login
-    await redis.del(key);
+    await prisma.user.update({
+      where: { email },
+      data: { loginAttempts: 0, lockedUntil: null }
+    });
     return { locked: false };
   }
-
-  // Increment failed attempts
-  const attempts = await redis.incr(key);
   
-  // Set expiry on first attempt
-  if (attempts === 1) {
-    await redis.expire(key, 3600); // 1 hour window
-  }
-
-  // Lock account after 10 failed attempts
-  if (attempts >= 10) {
-    const ttl = await redis.ttl(key);
-    const unlockAt = new Date(Date.now() + ttl * 1000);
-    
-    logger.warn('Account locked due to failed login attempts', {
-      email,
-      attempts,
-      unlockAt: unlockAt.toISOString(),
-    });
-
-    return {
-      locked: true,
-      remainingAttempts: 0,
-      unlockAt,
-    };
-  }
-
+  const attempts = (user.loginAttempts || 0) + 1;
+  const lockedUntil = attempts >= 10 
+    ? new Date(Date.now() + 3600000) 
+    : null;
+  
+  await prisma.user.update({
+    where: { email },
+    data: { loginAttempts: attempts, lockedUntil }
+  });
+  
   return {
-    locked: false,
-    remainingAttempts: 10 - attempts,
+    locked: attempts >= 10,
+    remainingAttempts: Math.max(0, 10 - attempts),
+    unlockAt: lockedUntil || undefined
   };
-};
+}
 export const emailLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 100,
