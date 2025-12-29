@@ -147,7 +147,9 @@ export const listUsers = asyncHandler(async (req: Request, res: Response) => {
     search,
     role,
     status,
+    tokenVersion: 0,
   });
+  
   
   res.json(result);
 });

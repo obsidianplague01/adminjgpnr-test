@@ -99,6 +99,7 @@ export const searchCustomers = asyncHandler(async (req: Request, res: Response) 
 });
 
 export const uploadDocument = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
   if (!req.file) {
     res.status(400).json({ error: 'No file uploaded' });
     return;

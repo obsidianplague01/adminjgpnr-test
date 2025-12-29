@@ -192,7 +192,7 @@ app.use('/uploads/avatars',
 app.use(csrfErrorHandler);
 app.use(notFoundHandler);
 app.use(sentryMiddleware.errorHandler);
-app.use((err: Error, _req: Request, res: Response, next: NextFunction) => {
+app.use((err: Error & { statusCode?: number }, _req: Request, res: Response, _next: NextFunction) => {
   logger.error('Error:', err);
   
   const isDev = process.env.NODE_ENV === 'development';

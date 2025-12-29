@@ -5,6 +5,7 @@ import { createClient } from 'redis';
 import { Request, Response } from 'express';
 import { logger } from '../utils/logger';
 import prisma from '../config/database';
+import redis from '../config/cache';
 
 const redisClient = createClient({
   url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,
@@ -99,7 +100,30 @@ export const authLimiter = rateLimit({
     });
   },
 });
-
+async function redisLockout(email: string, success: boolean) {
+  const key = `lockout:${email}`;
+  
+  if (success) {
+    await redis.del(key);
+    return { locked: false };
+  }
+  
+  const attempts = await redis.incr(key);
+  await redis.expire(key, 3600); // 1 hour
+  
+  if (attempts >= 10) {
+    return {
+      locked: true,
+      remainingAttempts: 0,
+      unlockAt: new Date(Date.now() + 3600000)
+    };
+  }
+  
+  return {
+    locked: false,
+    remainingAttempts: Math.max(0, 10 - attempts)
+  };
+}
 export const accountLockout = async (
   email: string,
   success: boolean

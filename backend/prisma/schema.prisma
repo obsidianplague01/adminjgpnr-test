@@ -24,7 +24,9 @@ enum TicketStatus {
   SCANNED
   CANCELLED
   EXPIRED
+  PENDING
 }
+
 
 enum CampaignStatus {
   DRAFT
@@ -119,6 +121,11 @@ model Order {
   customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
   tickets       Ticket[]
   
+  paymentStatus String? @default("pending")
+  paymentMethod String?
+  paidAmount    Decimal? @db.Decimal(10, 2)
+  paymentMetadata Json?
+
   @@index([customerId])
   @@index([orderNumber])
   @@index([status])
@@ -142,6 +149,9 @@ model Ticket {
   lastScanAt    DateTime?
   scanWindow    Int          @default(14)
   qrCodePath    String?
+
+  notes String?
+
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   
@@ -158,6 +168,7 @@ model Ticket {
   @@index([scanCount, maxScans]) 
   @@map("tickets")
 }
+
 
 model TicketScan {
   id            String   @id @default(cuid())
@@ -300,6 +311,9 @@ model AuditLog {
   
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
+  success Boolean @default(true)
+  errorMessage String?
+
   @@index([userId])
   @@index([entity])
   @@index([createdAt])
@@ -424,4 +438,14 @@ model RevenueTarget {
   @@unique([month])
   @@index([month])
   @@map("revenue_targets")
+}
+
+model WebhookLog {
+  id String @id @default(cuid())
+  event String
+  reference String
+  processedAt DateTime @default(now())
+  
+  @@unique([event, reference])
+  @@map("webhook_logs")
 }

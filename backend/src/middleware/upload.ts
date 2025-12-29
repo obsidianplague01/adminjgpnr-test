@@ -27,13 +27,22 @@ const MAX_FILES = 5;
 const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
 const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024;
 
-const ensureDir = (dir: string) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-};
 
-const storage = multer.memoryStorage();
+const uploadsDir = process.env.UPLOADS_DIR || './uploads/documents';
+
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (_req, file, cb) => {
+    const sanitized = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}-${sanitized}`);
+  }
+});
+
 
 
 export const postUploadValidation = async (
@@ -187,3 +196,8 @@ export const deleteFile = (filepath: string): boolean => {
     return false;
   }
 };
+export const uploadMiddleware = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_DOCUMENT_SIZE }
+});

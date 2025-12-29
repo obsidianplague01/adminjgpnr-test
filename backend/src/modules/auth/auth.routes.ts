@@ -13,6 +13,8 @@ import {
   createUserSchema,
   updateUserSchema,
   changePasswordSchema,
+  forgotPasswordSchema, 
+  resetPasswordSchema, 
 } from './auth.schema';
 
 const router = Router();
@@ -165,5 +167,11 @@ router.post(
   rateLimit({ windowMs: 3600000, max: 3 }), 
   validate(forgotPasswordSchema),
   authController.requestPasswordReset
+);
+router.post(
+  '/reset-password',
+  rateLimit({ windowMs: 3600000, max: 3 }),
+  validate(resetPasswordSchema),
+  authController.resetPassword // Add this controller method
 );
 export default router;

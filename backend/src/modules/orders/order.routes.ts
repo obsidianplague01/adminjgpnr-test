@@ -2,7 +2,7 @@
 import express from 'express';
 import { authenticate, authorize } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
-import { rateLimit } from '../../middleware/rateLimit';
+import { apiLimiter } from '../../middleware/rateLimit';
 import { csrfProtection } from '../../middleware/csrf';
 import { UserRole } from '@prisma/client';
 import * as orderController from './order.controller';
@@ -15,43 +15,43 @@ router.use(authenticate);
 
 router.get(
   '/',
-  rateLimit({ windowMs: 60000, max: 100 }),
+  apiLimiter,
   orderController.listOrders
 );
 
 router.get(
   '/:id',
-  rateLimit({ windowMs: 60000, max: 100 }),
+  apiLimiter,
   orderController.getOrder
 );
 
 router.get(
   '/number/:orderNumber',
-  rateLimit({ windowMs: 60000, max: 100 }),
+  apiLimiter,
   orderController.getOrderByNumber
 );
 
 router.get(
   '/:id/timeline',
-  rateLimit({ windowMs: 60000, max: 100 }),
+  apiLimiter,
   orderController.getOrderTimeline
 );
 
 router.get(
   '/customer/:customerId',
-  rateLimit({ windowMs: 60000, max: 100 }),
+  apiLimiter,
   orderController.getCustomerOrders
 );
 
 router.get(
   '/:id/tickets/download',
-  rateLimit({ windowMs: 60000, max: 10 }),
+  apiLimiter,
   orderController.downloadTickets
 );
 
 router.get(
   '/:id/receipt',
-  rateLimit({ windowMs: 60000, max: 10 }),
+  apiLimiter,
   orderController.downloadReceipt
 );
 
@@ -59,7 +59,7 @@ router.post(
   '/',
   authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 100 }), 
+  apiLimiter, 
   validate(orderSchema.createOrderSchema),
   orderController.createOrder
 );
@@ -68,7 +68,7 @@ router.patch(
   '/:id',
   authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 200 }),
+  apiLimiter,
   validate(orderSchema.updateOrderSchema),
   orderController.updateOrder
 );
@@ -77,7 +77,7 @@ router.post(
   '/:id/confirm-payment',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 100 }),
+  apiLimiter,
   validate(orderSchema.confirmPaymentSchema),
   orderController.confirmPayment
 );
@@ -86,7 +86,7 @@ router.post(
   '/:id/cancel',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 50 }),
+  apiLimiter,
   orderController.cancelOrder
 );
 
@@ -94,28 +94,28 @@ router.post(
   '/:id/resend-confirmation',
   authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 20 }), // 20 resends per hour
+  apiLimiter,
   orderController.resendConfirmation
 );
 
 router.get(
   '/stats/overview',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  rateLimit({ windowMs: 60000, max: 100 }),
+ apiLimiter,
   orderController.getOrderStats
 );
 
 router.get(
   '/analytics/revenue',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  rateLimit({ windowMs: 60000, max: 100 }),
+  apiLimiter,
   orderController.getRevenueBreakdown
 );
 
 router.get(
   '/export/csv',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
-  rateLimit({ windowMs: 3600000, max: 10 }), // 10 exports per hour
+  apiLimiter,
   orderController.exportOrdersCSV
 );
 
@@ -123,7 +123,7 @@ router.post(
   '/bulk',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 5 }), // 5 bulk operations per hour
+  apiLimiter, 
   orderController.bulkCreateOrders
 );
 
@@ -131,7 +131,7 @@ router.post(
   '/:id/refund',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 20 }),
+  apiLimiter,
   orderController.refundOrder
 );
 
@@ -139,7 +139,7 @@ router.post(
   '/:id/mark-fraud',
   authorize([UserRole.SUPER_ADMIN]), // Super admin only
   csrfProtection,
-  rateLimit({ windowMs: 3600000, max: 10 }),
+  apiLimiter,
   orderController.markAsFraud
 );
 

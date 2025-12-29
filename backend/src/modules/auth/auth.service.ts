@@ -92,17 +92,13 @@ export class AuthService {
       role: user.role,
     };
 
-    const accessToken = jwt.sign(
-      payload,
-      process.env.JWT_SECRET!,
-      { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' } as SignOptions
-    );
+    const accessToken = jwt.sign(payload, process.env.JWT_SECRET!, {
+      expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m'
+    });
 
-    const refreshToken = jwt.sign(
-      { userId: user.id },
-      process.env.JWT_REFRESH_SECRET!,
-      { expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d' } as SignOptions
-    );
+    const refreshToken = jwt.sign({ userId: user.id }, process.env.JWT_REFRESH_SECRET!, {
+      expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d'
+    });
 
     logger.info(`User logged in: ${user.email}`);
     const sessionId = crypto.randomBytes(32).toString('hex');
@@ -134,12 +130,9 @@ export class AuthService {
     const tokenExp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
     await blacklistToken(token, tokenExp - Math.floor(Date.now() / 1000));
     
-    // Generate NEW refresh token (rotation)
-    const newRefreshToken = jwt.sign(
-      { userId: user.id },
-      process.env.JWT_REFRESH_SECRET!,
-      { expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d' }
-    );
+    const newRefreshToken = jwt.sign({ userId: user.id }, process.env.JWT_REFRESH_SECRET!, {
+    expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d'
+    });
     
     const accessToken = jwt.sign(
       { userId: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion },
