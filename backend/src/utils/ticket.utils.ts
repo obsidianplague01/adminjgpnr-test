@@ -5,24 +5,20 @@ import path from 'path';
 import fs from 'fs';
 import { logger } from './logger';
 
-// Validate encryption key on startup
+
 if (!process.env.QR_ENCRYPTION_KEY) {
-  throw new Error('QR_ENCRYPTION_KEY environment variable is required');
+  throw new Error('QR_ENCRYPTION_KEY is required');
 }
 
-if (process.env.QR_ENCRYPTION_KEY.length !== 64) {
-  throw new Error('QR_ENCRYPTION_KEY must be a 32-byte (64 character) hex string');
+const keyBuffer = Buffer.from(process.env.QR_ENCRYPTION_KEY, 'hex');
+if (keyBuffer.length !== 32) {
+  throw new Error('QR_ENCRYPTION_KEY must be 64 character hex (32 bytes)');
 }
 
-let ENCRYPTION_KEY: Buffer;
-try {
-  ENCRYPTION_KEY = Buffer.from(process.env.QR_ENCRYPTION_KEY, 'hex');
-  if (ENCRYPTION_KEY.length !== 32) {
-    throw new Error('Invalid key length');
-  }
-} catch (error) {
-  throw new Error('QR_ENCRYPTION_KEY must be a valid 32-byte hex string');
+if (!/^[0-9a-fA-F]{64}$/.test(process.env.QR_ENCRYPTION_KEY)) {
+  throw new Error('QR_ENCRYPTION_KEY must be 64 character hex string');
 }
+
 
 const IV_LENGTH = 16;
 const ALGORITHM = 'aes-256-cbc';
@@ -74,9 +70,6 @@ export const decryptTicketData = (encryptedData: string): string => {
   }
 };
 
-/**
- * Generate QR code and save to local storage
- */
 export const generateQRCode = async (
   ticketCode: string,
   ticketData: any

@@ -219,6 +219,20 @@ const validateEnvironment = () => {
   logger.info('Environment validation passed');
 };
 
+const validateProductionConfig = () => {
+  if (process.env.NODE_ENV === 'production') {
+    const productionChecks = [
+      process.env.JWT_SECRET !== 'your_jwt_secret_key_here',
+      process.env.CORS_ORIGIN !== 'http://localhost:3000',
+      process.env.SENTRY_DSN !== undefined,
+      parseInt(process.env.BCRYPT_ROUNDS) >= 14,
+    ];
+    
+    if (!productionChecks.every(Boolean)) {
+      throw new Error('Production configuration incomplete');
+    }
+  }
+};
 
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
@@ -231,4 +245,5 @@ process.on('uncaughtException', (error) => {
 
 validateEnvironment();
 validateSecrets();
+validateProductionConfig();
 startServer();

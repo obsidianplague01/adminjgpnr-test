@@ -16,6 +16,12 @@ const performanceService = new PerformanceService();
 const customerCampaignService = new CustomerCampaignService();
 const analyticsService = new AnalyticsService();
 
+const CACHE_TTL = {
+  KPI: 300,          
+  OVERVIEW: 300,   
+  DETAILED: 600,     
+  FORECAST: 3600,    
+};
 export const getDashboardKPIs = asyncHandler(async (req: Request, res: Response) => {
   const period = (req.query.period as TimePeriod) || TimePeriod.THIRTY_DAYS;
   
@@ -24,9 +30,8 @@ export const getDashboardKPIs = asyncHandler(async (req: Request, res: Response)
   const data = await cacheService.getOrSet(
     cacheKey,
     () => kpiService.getDashboardKPIs(period),
-    300
+    CACHE_TTL.KPI
   );
-  
   res.json(data);
 });
 

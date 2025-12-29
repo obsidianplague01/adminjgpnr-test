@@ -112,7 +112,6 @@ router.post(
   twoFactorController.regenerateBackupCodes
 );
 
-// User management (Super Admin only)
 router.get('/users', requireSuperAdmin, authController.listUsers);
 router.get('/users/:id', requireSuperAdmin, authController.getUser);
 
@@ -161,4 +160,10 @@ router.delete(
   authController.deactivateUser
 );
 
+router.post(
+  '/forgot-password',
+  rateLimit({ windowMs: 3600000, max: 3 }), 
+  validate(forgotPasswordSchema),
+  authController.requestPasswordReset
+);
 export default router;

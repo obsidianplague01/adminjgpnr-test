@@ -1,11 +1,10 @@
 // src/middleware/rateLimit.ts 
 import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
-
 import RedisStore from 'rate-limit-redis';
 import { createClient } from 'redis';
 import { Request, Response } from 'express';
 import { logger } from '../utils/logger';
-import redis from '../config/cache';
+import prisma from '../config/database';
 
 const redisClient = createClient({
   url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,
@@ -38,6 +37,21 @@ declare module 'express' {
   }
 }
 
+import { MemoryStore } from 'express-rate-limit';
+
+const createStore = (prefix: string) => {
+  try {
+    return new RedisStore({
+      sendCommand: (...args: string[]) => redisClient.sendCommand(args),
+      prefix: `rl:${prefix}:`,
+    });
+  } catch (error) {
+    logger.warn(`Redis unavailable for rate limiter, using memory store for ${prefix}`);
+    return new MemoryStore();
+  }
+};
+
+
 const createRedisStore = (prefix: string) => {
   return new RedisStore({
     sendCommand: (...args: string[]) => redisClient.sendCommand(args),
@@ -48,10 +62,10 @@ const createRedisStore = (prefix: string) => {
 export const apiLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  store: createStore('api'),
   message: 'Too many requests, please try again later',
   standardHeaders: true,
   legacyHeaders: false,
-  store: createRedisStore('api'),
   skip: (req) => {
     return req.path === '/health' || req.path === '/api/health';
   },

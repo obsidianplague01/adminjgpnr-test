@@ -58,41 +58,19 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
-  auditLogs     AuditLog[]
   notifications Notification[]
   loginActivities LoginActivity[]
   activeSessions  ActiveSession[]
   loginAttempts Int      @default(0)
   lockedUntil   DateTime?
-  
+  resetToken String?
+  resetTokenExpiry DateTime?
+
   @@index([email])
   @@index([role, isActive])
   @@index([email, lockedUntil])
   @@map("users")
   
-}
-model AuditLog {
-  id           String   @id @default(cuid())
-  userId       String?
-  action       String
-  entity       String
-  entityId     String?
-  details      Json     @default("{}")
-  ipAddress    String?
-  userAgent    String?
-  success      Boolean  @default(true)
-  errorMessage String?
-  createdAt    DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId])
-  @@index([action])
-  @@index([entity])
-  @@index([entityId])
-  @@index([createdAt])
-  @@index([success])
-  @@map("audit_logs")
 }
 model Customer {
   id            String   @id @default(cuid())
@@ -269,7 +247,6 @@ model Campaign {
   @@map("campaigns")
 }
 
-// NEW: Campaign Tracking
 model CampaignTracking {
   id            String   @id @default(cuid())
   campaignId    String
@@ -424,7 +401,6 @@ model SystemSettings {
   @@map("system_settings")
 }
 
-// NEW: Analytics Cache
 model AnalyticsCache {
   id          String   @id @default(cuid())
   cacheKey    String   @unique
@@ -437,7 +413,6 @@ model AnalyticsCache {
   @@map("analytics_cache")
 }
 
-// NEW: Revenue Targets
 model RevenueTarget {
   id          String   @id @default(cuid())
   month       String   // YYYY-MM

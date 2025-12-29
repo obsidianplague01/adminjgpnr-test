@@ -7,7 +7,7 @@ import { Request } from 'express';
 import { fileTypeFromBuffer } from 'file-type';
 import { logger } from '../utils/logger';
 import { promises as fsPromises } from 'fs';
-
+import { Response, NextFunction } from 'express';
 const ALLOWED_EXTENSIONS = [
   '.jpg', '.jpeg', '.png', '.gif', '.webp',
   '.pdf', '.doc', '.docx', '.xls', '.xlsx',
@@ -22,9 +22,10 @@ const ALLOWED_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ];
 
-const MAX_FILE_SIZE = 12 * 1024 * 1024; 
-const MAX_FILES = 5;
 
+const MAX_FILES = 5;
+const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
+const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024;
 
 const ensureDir = (dir: string) => {
   if (!fs.existsSync(dir)) {
@@ -32,37 +33,8 @@ const ensureDir = (dir: string) => {
   }
 };
 
-const storage = multer.diskStorage({
-  destination: (_req, file, cb) => {
-    let uploadPath = 'uploads/documents';
-    if (file.fieldname === 'avatar') uploadPath = 'uploads/avatars';
-    else if (file.fieldname === 'customerDoc') uploadPath = 'uploads/customer-documents';
-    else if (file.fieldname === 'orderDoc') uploadPath = 'uploads/order-documents';
-    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-      return cb(new Error('Invalid file type'), '');
-    }
-    try {
+const storage = multer.memoryStorage();
 
-      ensureDir(uploadPath);
-      cb(null, uploadPath);
-    } catch (error) {
-      cb(new Error('Failed to create upload directory'), '');
-    }
-  },
-  filename: (_req, file, cb) => {
-    try {
-      const uniqueSuffix = crypto.randomBytes(16).toString('hex');
-      const ext = path.extname(file.originalname);
-      const sanitizedExt = ext.replace(/[^a-zA-Z0-9.-]/g, '');
-      const quarantinePath = 'uploads/quarantine';
-      ensureDir(quarantinePath);
-      cb(null, `quarantine-${Date.now()}-${crypto.randomBytes(16).toString('hex')}`);
-      cb(null, `${Date.now()}-${uniqueSuffix}${sanitizedExt}`);
-    } catch (error) {
-      cb(new Error('Failed to generate filename'), '');
-    }
-  },
-});
 
 export const postUploadValidation = async (
   req: Request, 
@@ -71,19 +43,35 @@ export const postUploadValidation = async (
 ) => {
   if (!req.file) return next();
   
-  const isValid = await validateUploadedFile(req.file.path);
+  // Validate BEFORE writing to disk
+  const isValid = await validateUploadedBuffer(req.file.buffer);
   
   if (!isValid) {
-    await fsPromises.unlink(req.file.path);
     return res.status(400).json({ error: 'File validation failed' });
   }
-  
-  const finalPath = req.file.path.replace('quarantine', 'documents');
-  await fsPromises.rename(req.file.path, finalPath);
+
+  const finalPath = path.join(uploadsDir, `${Date.now()}-${crypto.randomBytes(16).toString('hex')}`);
+  await fsPromises.writeFile(finalPath, req.file.buffer);
   req.file.path = finalPath;
   
   next();
 };
+async function validateUploadedBuffer(buffer: Buffer): Promise<boolean> {
+  const fileType = await fileTypeFromBuffer(buffer);
+  if (!fileType) return false;
+
+  const allowedTypes = ['jpg', 'png', 'gif', 'webp', 'pdf', 'docx', 'xlsx'];
+  if (!allowedTypes.includes(fileType.ext)) return false;
+
+  const content = buffer.toString('utf8', 0, 1024);
+  const dangerousPatterns = [/<script/i, /<\?php/i, /<%/, /#!/];
+  
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(content)) return false;
+  }
+
+  return true;
+}
 const fileFilter = (
   _req: Request,
   file: Express.Multer.File,
@@ -119,7 +107,7 @@ export const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: MAX_FILE_SIZE,
+    fileSize: MAX_DOCUMENT_SIZE,
     files: MAX_FILES,
   },
 });
@@ -174,8 +162,16 @@ export const validateUploadedFile = async (filepath: string): Promise<boolean> =
 
 
 export const uploadSingle = upload.single('file');
-export const uploadAvatar = upload.single('avatar');
-export const uploadCustomerDoc = upload.single('customerDoc');
+export const uploadAvatar = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_AVATAR_SIZE },
+});
+export const uploadCustomerDoc = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_DOCUMENT_SIZE },
+});
 export const uploadOrderDoc = upload.single('orderDoc');
 export const uploadMultiple = upload.array('files', MAX_FILES);
 

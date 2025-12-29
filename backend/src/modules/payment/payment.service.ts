@@ -2,8 +2,8 @@
 import crypto from 'crypto';
 import axios from 'axios';
 import { PrismaClient, OrderStatus, TicketStatus } from '@prisma/client';
-import { logger } from '../utils/logger';
-import { AppError } from '../middleware/errorHandler';
+import { logger } from '../../utils/logger';
+import { AppError } from '../../middleware/errorHandler';
 import { redis } from '../config/redis';
 import { emailService } from './email.service';
 import { immutableAuditService } from './immutableAudit.service';
@@ -50,8 +50,8 @@ export class PaymentService {
   private readonly paystackSecretKey: string;
   private readonly paystackPublicKey: string;
   private readonly paystackBaseUrl = 'https://api.paystack.co';
-  private readonly webhookIdempotencyTTL = 604800; // 7 days
-  private readonly maxWebhookAge = 48; // hours
+  private readonly webhookIdempotencyTTL = 604800; 
+  private readonly maxWebhookAge = 48; 
 
   constructor() {
     this.paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
@@ -61,28 +61,19 @@ export class PaymentService {
       throw new Error('PAYSTACK_SECRET_KEY is not configured');
     }
   }
-
-  /**
-   * Handle incoming Paystack webhook
-   */
   async handleWebhook(payload: WebhookPayload, signature: string, req: Request) {
     const startTime = Date.now();
     
     try {
-      // 1. Validate signature presence
       if (!signature) {
         await this.logWebhookFailure(payload, req.ip, 'Missing signature');
         throw new AppError(401, 'Missing webhook signature');
       }
 
-      // 2. Validate payload structure
       if (!payload || !payload.event || !payload.data) {
         await this.logWebhookFailure(payload, req.ip, 'Invalid payload structure');
         throw new AppError(400, 'Invalid payload structure');
       }
-
-      // 3. Verify signature
-      await this.verifyWebhookSignature(signature, req);
 
       const { event, data } = payload;
       const reference = data.reference;
@@ -92,24 +83,19 @@ export class PaymentService {
         throw new AppError(400, 'Missing payment reference');
       }
 
-      // 4. Check idempotency
-      const isDuplicate = await this.checkIdempotency(event, reference);
-      if (isDuplicate) {
-        logger.info('Duplicate webhook ignored', { event, reference });
-        return { 
-          message: 'Webhook already processed', 
-          event,
-          duplicate: true 
-        };
-      }
-
-      // 5. Validate webhook timestamp
       await this.validateWebhookTimestamp(data);
 
-      // 6. Mark as processing (prevents duplicate processing)
+      const isDuplicate = await this.checkIdempotency(event, reference);
+
+      if (isDuplicate) {
+        logger.info('Duplicate webhook ignored', { event, reference });
+        return { message: 'Webhook already processed', event, duplicate: true };
+      }
+
+      await this.verifyWebhookSignature(signature, req);
+      
       await this.markWebhookProcessing(event, reference);
 
-      // 7. Process webhook event
       logger.info(`Processing webhook: ${event}`, { 
         reference, 
         status: data.status,
@@ -118,10 +104,8 @@ export class PaymentService {
 
       const result = await this.processWebhookEvent(payload, req.ip);
 
-      // 8. Mark as completed
       await this.markWebhookCompleted(event, reference);
 
-      // 9. Log successful processing
       await immutableAuditService.createLog({
         action: 'WEBHOOK_PROCESSED',
         entity: 'PAYMENT',
@@ -154,7 +138,6 @@ export class PaymentService {
         processingTime
       });
 
-      // Log failure in immutable audit
       await immutableAuditService.createLog({
         action: 'WEBHOOK_FAILED',
         entity: 'PAYMENT',
@@ -167,7 +150,6 @@ export class PaymentService {
         }
       });
 
-      // Clean up processing lock on failure
       if (payload?.data?.reference) {
         await this.clearWebhookLock(payload.event, payload.data.reference);
       }
@@ -215,19 +197,27 @@ export class PaymentService {
     logger.info('Webhook signature verified successfully');
   }
 
-  /**
-   * Check if webhook was already processed (idempotency)
-   */
+
   private async checkIdempotency(event: string, reference: string): Promise<boolean> {
     const idempotencyKey = `webhook:${event}:${reference}`;
     const status = await redis.get(idempotencyKey);
+      
+    if (!status) {
+      const existing = await prisma.webhookLog.findUnique({
+        where: {
+          event_reference: {
+            event,
+            reference
+          }
+        }
+      });
+      return existing !== null;
+    }
     
     return status !== null;
   }
 
-  /**
-   * Mark webhook as being processed
-   */
+ 
   private async markWebhookProcessing(event: string, reference: string): Promise<void> {
     const idempotencyKey = `webhook:${event}:${reference}`;
     const lockKey = `webhook:lock:${event}:${reference}`;
@@ -243,9 +233,6 @@ export class PaymentService {
     await redis.setex(idempotencyKey, this.webhookIdempotencyTTL, 'processing');
   }
 
-  /**
-   * Mark webhook as completed
-   */
   private async markWebhookCompleted(event: string, reference: string): Promise<void> {
     const idempotencyKey = `webhook:${event}:${reference}`;
     const lockKey = `webhook:lock:${event}:${reference}`;
@@ -254,17 +241,11 @@ export class PaymentService {
     await redis.del(lockKey);
   }
 
-  /**
-   * Clear webhook processing lock
-   */
   private async clearWebhookLock(event: string, reference: string): Promise<void> {
     const lockKey = `webhook:lock:${event}:${reference}`;
     await redis.del(lockKey);
   }
 
-  /**
-   * Validate webhook timestamp to prevent replay attacks
-   */
   private async validateWebhookTimestamp(data: any): Promise<void> {
     if (data.paid_at) {
       const paidAt = new Date(data.paid_at);
@@ -282,9 +263,6 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Process webhook event based on type
-   */
   private async processWebhookEvent(payload: WebhookPayload, ipAddress?: string) {
     const { event, data } = payload;
 
@@ -313,9 +291,6 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Handle successful payment
-   */
   private async handleSuccessfulPayment(data: any, ipAddress?: string) {
     const reference = data.reference;
 
@@ -438,9 +413,6 @@ export class PaymentService {
     });
   }
 
-  /**
-   * Handle failed payment
-   */
   private async handleFailedPayment(data: any, ipAddress?: string) {
     const reference = data.reference;
 
@@ -504,9 +476,6 @@ export class PaymentService {
     });
   }
 
-  /**
-   * Handle disputed payment (chargeback)
-   */
   private async handleDisputedPayment(data: any, ipAddress?: string) {
     const reference = data.reference;
 
@@ -592,9 +561,6 @@ export class PaymentService {
     });
   }
 
-  /**
-   * Handle transfer success
-   */
   private async handleTransferSuccess(data: any, ipAddress?: string) {
     logger.info('Transfer success webhook received', { data });
 
@@ -609,9 +575,6 @@ export class PaymentService {
     return { message: 'Transfer success recorded' };
   }
 
-  /**
-   * Handle transfer failure
-   */
   private async handleTransferFailed(data: any, ipAddress?: string) {
     logger.warn('Transfer failed webhook received', { data });
 
@@ -626,9 +589,6 @@ export class PaymentService {
     return { message: 'Transfer failure recorded' };
   }
 
-  /**
-   * Handle refund processed
-   */
   private async handleRefundProcessed(data: any, ipAddress?: string) {
     const reference = data.reference;
 
@@ -693,9 +653,6 @@ export class PaymentService {
     });
   }
 
-  /**
-   * Send payment confirmation email
-   */
   private async sendPaymentConfirmationEmail(order: any, paymentData: any) {
     try {
       await emailService.sendEmail({
@@ -718,9 +675,6 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Send payment failure email
-   */
   private async sendPaymentFailureEmail(order: any, paymentData: any) {
     try {
       await emailService.sendEmail({
@@ -740,9 +694,6 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Log webhook failure
-   */
   private async logWebhookFailure(payload: any, ipAddress?: string, reason?: string) {
     try {
       await immutableAuditService.createLog({
@@ -761,9 +712,6 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Initialize payment (for frontend to call)
-   */
   async initializePayment(orderId: string) {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -826,9 +774,6 @@ export class PaymentService {
     }
   }
 
-  /**
-   * Verify payment status (for frontend polling)
-   */
   async verifyPayment(reference: string) {
     try {
       const response = await axios.get<PaystackResponse>(

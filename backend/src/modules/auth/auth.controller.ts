@@ -35,73 +35,55 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
   res.json(result);
 });
 
-/**
- * Get current authenticated user
- */
 export const getCurrentUser = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.getCurrentUser(req.user!.userId);
   res.json(user);
 });
 
-/**
- * Logout 
- */
-// SECURE CODE
+
 export const logout = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.json({ message: 'Logged out successfully' });
-      return;
-    }
-
-    const token = authHeader.substring(7);
-    
-    try {
-      
-      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
-      
+  const authHeader = req.headers.authorization;
   
-      const now = Math.floor(Date.now() / 1000);
-      const expiresIn = decoded.exp! - now;
-      
-      if (expiresIn > 0 && expiresIn < 86400) { 
-        await blacklistToken(token, expiresIn);
-        
-        
-        await prisma.auditLog.create({
-          data: {
-            userId: decoded.userId,
-            action: 'LOGOUT',
-            entity: 'AUTH',
-            ipAddress: req.ip,
-            userAgent: req.get('user-agent'),
-          },
-        });
-        
-        logger.info('User logged out', {
-          userId: decoded.userId,
-          ip: req.ip,
-          tokenExp: new Date(decoded.exp! * 1000).toISOString(),
-        });
-      }
-    } catch (error) {
-      
-      logger.debug('Logout called with invalid token', { ip: req.ip });
-    }
-
-    monitoring.clearUser();
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.json({ message: 'Logged out successfully' });
-  } catch (error) {
-    logger.error('Logout error:', error);
-    res.json({ message: 'Logged out successfully' }); 
+    return;
   }
+
+  const token = authHeader.substring(7);
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
+    
+    const now = Math.floor(Date.now() / 1000);
+    const expiresIn = decoded.exp! - now;
+    
+    if (expiresIn > 0 && expiresIn < 86400) {
+      // 1. Blacklist token
+      await blacklistToken(token, expiresIn);
+      
+      // 2. ✅ Delete active session
+      await prisma.activeSession.deleteMany({
+        where: { token }
+      });
+      
+      // 3. Audit log
+      await prisma.auditLog.create({
+        data: {
+          userId: decoded.userId,
+          action: 'LOGOUT',
+          entity: 'AUTH',
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent'),
+        },
+      });
+    }
+  } catch (error) {
+    logger.debug('Logout called with invalid token', { ip: req.ip });
+  }
+
+  res.json({ message: 'Logged out successfully' });
 });
 
-/**
- * Create new user (admin only)
- */
 export const createUser = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.createUser(req.body);
   
@@ -115,9 +97,6 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
   res.status(201).json(user);
 });
 
-/**
- * Update user details (admin only)
- */
 export const updateUser = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.updateUser(req.params.id, req.body);
   
@@ -130,9 +109,6 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
   res.json(user);
 });
 
-/**
- * Change user password
- */
 export const changePassword = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.params.id;
   
@@ -158,9 +134,6 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
   res.json(result);
 });
 
-/**
- * List all users (admin only)
- */
 export const listUsers = asyncHandler(async (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
   const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -179,17 +152,11 @@ export const listUsers = asyncHandler(async (req: Request, res: Response) => {
   res.json(result);
 });
 
-/**
- * Get specific user by ID (admin only)
- */
 export const getUser = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.getCurrentUser(req.params.id);
   res.json(user);
 });
 
-/**
- * Deactivate user account (admin only)
- */
 export const deactivateUser = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.params.id;
   
@@ -212,9 +179,6 @@ export const deactivateUser = asyncHandler(async (req: Request, res: Response) =
   res.json(result);
 });
 
-/**
- * Reactivate user account (admin only)
- */
 export const reactivateUser = asyncHandler(async (req: Request, res: Response) => {
   const result = await authService.reactivateUser(req.params.id);
   
@@ -227,9 +191,6 @@ export const reactivateUser = asyncHandler(async (req: Request, res: Response) =
   res.json(result);
 });
 
-/**
- * Delete user permanently (super admin only)
- */
 export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.params.id;
   
@@ -252,9 +213,6 @@ export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
   res.json(result);
 });
 
-/**
- * Get user activity log (admin only)
- */
 export const getUserActivity = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.params.id;
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
@@ -263,9 +221,6 @@ export const getUserActivity = asyncHandler(async (req: Request, res: Response) 
   res.json(activity);
 });
 
-/**
- * Update own profile
- */
 export const updateProfile = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user!.userId;
   
@@ -289,9 +244,6 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response) =>
   res.json(user);
 });
 
-/**
- * Enable 2FA for user
- */
 export const enable2FA = asyncHandler(async (req: Request, res: Response) => {
   const result = await authService.enable2FA(req.user!.userId);
   
@@ -303,9 +255,6 @@ export const enable2FA = asyncHandler(async (req: Request, res: Response) => {
   res.json(result);
 });
 
-/**
- * Verify 2FA code
- */
 export const verify2FA = asyncHandler(async (req: Request, res: Response) => {
   const { code } = req.body;
   const result = await authService.verify2FA(req.user!.userId, code);
@@ -313,9 +262,6 @@ export const verify2FA = asyncHandler(async (req: Request, res: Response) => {
   res.json(result);
 });
 
-/**
- * Disable 2FA for user
- */
 export const disable2FA = asyncHandler(async (req: Request, res: Response) => {
   const { password } = req.body;
   const result = await authService.disable2FA(req.user!.userId, password);

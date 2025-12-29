@@ -28,10 +28,11 @@ declare global {
 
 const isTokenBlacklisted = async (token: string): Promise<boolean> => {
   try {
-    return await cacheService.exists(`blacklist:${token}`);
+    const exists = await cacheService.exists(`blacklist:${token}`);
+    return exists;
   } catch (error) {
     logger.error('Token blacklist check failed:', error);
-    return false;
+    throw new Error('Token verification unavailable');
   }
 };
 

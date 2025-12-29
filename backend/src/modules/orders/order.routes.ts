@@ -1,12 +1,13 @@
 // src/modules/orders/order.routes.ts
 import express from 'express';
 import { authenticate, authorize } from '../../middleware/auth';
-import { validate } from '../../middleware/validation';
+import { validate } from '../../middleware/validate';
 import { rateLimit } from '../../middleware/rateLimit';
 import { csrfProtection } from '../../middleware/csrf';
 import { UserRole } from '@prisma/client';
 import * as orderController from './order.controller';
 import * as orderSchema from './order.schema';
+import { fileDownloadLimiter } from '../../middleware/rateLimit';
 
 const router = express.Router();
 
@@ -18,54 +19,42 @@ router.get(
   orderController.listOrders
 );
 
-// Get specific order
 router.get(
   '/:id',
   rateLimit({ windowMs: 60000, max: 100 }),
   orderController.getOrder
 );
 
-// Get order by number
 router.get(
   '/number/:orderNumber',
   rateLimit({ windowMs: 60000, max: 100 }),
   orderController.getOrderByNumber
 );
 
-// Get order timeline
 router.get(
   '/:id/timeline',
   rateLimit({ windowMs: 60000, max: 100 }),
   orderController.getOrderTimeline
 );
 
-/**
- * Customer-specific routes
- */
-
-// Get customer's orders
 router.get(
   '/customer/:customerId',
   rateLimit({ windowMs: 60000, max: 100 }),
   orderController.getCustomerOrders
 );
 
-// Download tickets
 router.get(
   '/:id/tickets/download',
   rateLimit({ windowMs: 60000, max: 10 }),
   orderController.downloadTickets
 );
 
-// Download receipt
 router.get(
   '/:id/receipt',
   rateLimit({ windowMs: 60000, max: 10 }),
   orderController.downloadReceipt
 );
 
-
-// Create order
 router.post(
   '/',
   authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -75,7 +64,6 @@ router.post(
   orderController.createOrder
 );
 
-// Update order
 router.patch(
   '/:id',
   authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -85,7 +73,6 @@ router.patch(
   orderController.updateOrder
 );
 
-// Confirm payment
 router.post(
   '/:id/confirm-payment',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -95,7 +82,6 @@ router.post(
   orderController.confirmPayment
 );
 
-// Cancel order
 router.post(
   '/:id/cancel',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -104,7 +90,6 @@ router.post(
   orderController.cancelOrder
 );
 
-// Resend confirmation
 router.post(
   '/:id/resend-confirmation',
   authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -113,8 +98,6 @@ router.post(
   orderController.resendConfirmation
 );
 
-
-// Get statistics
 router.get(
   '/stats/overview',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -122,7 +105,6 @@ router.get(
   orderController.getOrderStats
 );
 
-// Revenue breakdown
 router.get(
   '/analytics/revenue',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -130,7 +112,6 @@ router.get(
   orderController.getRevenueBreakdown
 );
 
-// Export orders
 router.get(
   '/export/csv',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -138,7 +119,6 @@ router.get(
   orderController.exportOrdersCSV
 );
 
-// Bulk create orders
 router.post(
   '/bulk',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -147,7 +127,6 @@ router.post(
   orderController.bulkCreateOrders
 );
 
-// Refund order
 router.post(
   '/:id/refund',
   authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
@@ -156,7 +135,6 @@ router.post(
   orderController.refundOrder
 );
 
-// Mark as fraud
 router.post(
   '/:id/mark-fraud',
   authorize([UserRole.SUPER_ADMIN]), // Super admin only
@@ -165,4 +143,10 @@ router.post(
   orderController.markAsFraud
 );
 
+router.post('/:id/tickets/download', 
+  authenticate,
+  csrfProtection,
+  fileDownloadLimiter,
+  orderController.downloadTickets
+);
 export default router;

@@ -8,33 +8,31 @@ import { logger } from '../utils/logger';
 export const sanitizeString = (str: string): string => {
   if (typeof str !== 'string') return str;
   
-  // ✅ 1. HTML/XSS protection
-  let cleaned = DOMPurify.sanitize(str, {
+  let cleaned = str.replace(/\0/g, '');
+  
+  cleaned = DOMPurify.sanitize(str, {
     ALLOWED_TAGS: [],
     ALLOWED_ATTR: [],
     KEEP_CONTENT: true,
   });
   
-  // ✅ 2. Remove control characters
   cleaned = cleaned.replace(/[\x00-\x1F\x7F]/g, '');
   
-  // ✅ 3. Normalize whitespace
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   
-  // ✅ 4. Prevent LDAP injection
+  cleaned = cleaned.replace(/--|\/\*|\*\//g, '');
   const ldapChars = ['*', '(', ')', '\\', '\0'];
   for (const char of ldapChars) {
     cleaned = cleaned.replace(new RegExp(char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '');
   }
   
-  return cleaned;
+  return cleaned.trim();
 };
 
 export const sanitizeMongoOperators = (obj: any): any => {
   if (obj === null || obj === undefined) return obj;
   
   if (typeof obj === 'string') {
-    // Remove MongoDB operators
     return obj.replace(/^\$/, '');
   }
   
@@ -46,10 +44,9 @@ export const sanitizeMongoOperators = (obj: any): any => {
     const sanitized: any = {};
     
     for (const [key, value] of Object.entries(obj)) {
-      // ✅ Remove $ operators from keys
+      
       const sanitizedKey = key.replace(/^\$/, '');
       
-      // ✅ Prevent prototype pollution
       if (['__proto__', 'constructor', 'prototype'].includes(sanitizedKey)) {
         continue;
       }
@@ -416,33 +413,35 @@ export const createCampaignSchema = z.object({
   }),
 });
 
+export const idParamSchema = z.object({
+  params: z.object({
+    id: z.string().cuid('Invalid ID format'),
+  }),
+});
+
 export const schemas = {
-  // Customer
+  
   createCustomer: createCustomerSchema,
   updateCustomer: updateCustomerSchema,
   customerStatusChange: customerStatusChangeSchema,
   
-  // Ticket
   scanTicket: scanTicketSchema,
   cancelTicket: cancelTicketSchema,
   bulkCancelTickets: bulkCancelTicketsSchema,
   extendTicket: extendTicketSchema,
   updateTicketNotes: updateTicketNotesSchema,
   
-  // Auth
   login: loginSchema,
   register: registerSchema,
   changePassword: changePasswordSchema,
   forgotPassword: forgotPasswordSchema,
   resetPassword: resetPasswordSchema,
   
-  // User
   createUser: createUserSchema,
   updateUser: updateUserSchema,
   
-  // Order
   createOrder: createOrderSchema,
   
-  // Campaign
   createCampaign: createCampaignSchema,
+  idParam: idParamSchema
 };

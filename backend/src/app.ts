@@ -5,11 +5,14 @@ import helmet from 'helmet';
 import path from 'path';
 import cookieParser from 'cookie-parser';
 
-// Middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { sanitizeInput } from './middleware/validate';
 import { authenticate, authorizeFileAccess } from './middleware/auth';
 import { csrfProtection, getCsrfToken, csrfErrorHandler } from './middleware/csrf';
+import rateLimit from 'express-rate-limit';
+import * as paymentController from './modules/payment/payment.controller';
+import { Request, Response, NextFunction } from 'express';
+
 import { 
   apiLimiter, 
   authLimiter, 
@@ -40,6 +43,13 @@ import auditRoutes from './modules/audit/audit.routes';
 
 const app = express();
 const API_VERSION = 'v1';
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 50,
+  message: 'Too many webhook requests',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 initializeSentry(app);
 const sentryMiddleware = getSentryMiddleware();
@@ -68,7 +78,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", 'wss:', 'https:'], // ✅ Add WebSocket
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -94,10 +104,12 @@ app.use(helmet({
 }));
 
 app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   if (process.env.NODE_ENV === 'production') {
-    res.setHeader('Expect-CT', 'max-age=86400, enforce');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
   }
   next();
 });
@@ -129,7 +141,10 @@ if (process.env.TRUST_PROXY === 'true') {
   app.set('trust proxy', 1);
 }
 
-app.get('/api/csrf-token', csrfProtection, getCsrfToken);
+app.get('/api/csrf-token', 
+  rateLimit({ windowMs: 60000, max: 30 }), 
+  getCsrfToken
+);
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api', apiLimiter);
 
@@ -140,7 +155,7 @@ app.use(`/api/${API_VERSION}/customers`, authenticate, csrfProtection, customerR
 app.use(`/api/${API_VERSION}/email`, authenticate, csrfProtection, emailRoutes);
 app.use(`/api/${API_VERSION}/batch`, authenticate, csrfProtection, batchRoutes);
 
-app.use('/api/payments/webhook', paymentRoutes);
+
 app.use(`/api/${API_VERSION}/analytics`, authenticate, analyticsRoutes);
 app.use(`/api/${API_VERSION}/notifications`, authenticate, notificationRoutes);
 app.use(`/api/${API_VERSION}/subscribers`, authenticate, subscriberRoutes);
@@ -149,6 +164,10 @@ app.use(`/api/${API_VERSION}/settings/advanced`, authenticate, advancedSettingsR
 app.use(`/api/${API_VERSION}/monitoring`, authenticate, monitoringRoutes);
 app.use(`/api/${API_VERSION}/audit`, authenticate, auditRoutes);
 
+app.post('/api/payments/webhook', 
+  webhookLimiter,
+  paymentController.handleWebhook
+);
 app.use('/uploads/qrcodes', 
   authenticate, 
   authorizeFileAccess, 
@@ -173,6 +192,16 @@ app.use('/uploads/avatars',
 app.use(csrfErrorHandler);
 app.use(notFoundHandler);
 app.use(sentryMiddleware.errorHandler);
+app.use((err: Error, _req: Request, res: Response, next: NextFunction) => {
+  logger.error('Error:', err);
+  
+  const isDev = process.env.NODE_ENV === 'development';
+  
+  res.status(err.statusCode || 500).json({
+    error: err.message,
+    ...(isDev && { stack: err.stack }),
+  });
+});
 app.use(errorHandler);
 
 export default app;

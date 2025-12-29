@@ -43,13 +43,25 @@ function generateSecureCode(length: number, charset: string): string {
 }
 
 export class OrderService {
+  private orderCounter: number = 0;
   private readonly qrCodeDir = path.join(process.cwd(), 'uploads', 'qrcodes');
 
   constructor() {
-   
     this.ensureQRDirectory();
+    this.initializeOrderCounter();
   }
 
+  private async initializeOrderCounter() {
+    const latestOrder = await prisma.order.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { orderNumber: true }
+    });
+    
+    if (latestOrder) {
+      const match = latestOrder.orderNumber.match(/-(\d+)-/);
+      this.orderCounter = match ? parseInt(match[1]) + 1 : 0;
+    }
+  }
 
   private async ensureQRDirectory() {
     try {
@@ -59,10 +71,13 @@ export class OrderService {
     }
   }
 
-  private generateOrderNumber(): string {
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const random = crypto.randomBytes(6).toString('hex').toUpperCase();
-    return `ORD-${timestamp}-${random}`;
+ private generateOrderNumber(): string {
+  
+    const hrTime = process.hrtime.bigint().toString(36).toUpperCase();
+    const random = crypto.randomBytes(8).toString('hex').toUpperCase(); // More bytes
+    const counter = this.orderCounter++; // Add in-memory counter
+    
+    return `ORD-${hrTime}-${counter.toString(36).toUpperCase()}-${random}`;
   }
 
   private generateTicketCode(): string {
@@ -393,138 +408,136 @@ export class OrderService {
     userId?: string,
     ipAddress?: string
   ) {
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      include: {
-        customer: true,
-        tickets: true,
-      },
-    });
-
-    if (!order) {
-      throw new AppError(404, 'Order not found');
-    }
-
-    if (order.status === OrderStatus.COMPLETED) {
-      throw new AppError(400, 'Order already completed');
-    }
-
-    // Update order and activate tickets in transaction
-    const updatedOrder = await prisma.$transaction(async (tx) => {
-      // Update order status
-      const updated = await tx.order.update({
+    try {
+      const order = await prisma.order.findUnique({
         where: { id: orderId },
-        data: {
-          status: OrderStatus.COMPLETED,
-          paymentStatus: 'paid',
-          paidAt: new Date(),
-          paidAmount: data.paidAmount,
-          paymentReference: data.paymentReference,
-          paymentMethod: data.paymentMethod,
-        },
         include: {
           customer: true,
           tickets: true,
         },
       });
 
-      // Update customer stats
-      await tx.customer.update({
-        where: { id: order.customerId },
-        data: {
-          totalOrders: { increment: 1 },
-          totalSpent: { increment: order.amount },
-          lastPurchase: new Date(),
-        },
-      });
-
-      // Activate tickets and generate QR codes
-      const activatedTickets = [];
-      for (const ticket of order.tickets) {
-        try {
-          // Generate QR code
-          const qrPath = await this.generateQRForTicket(ticket, order);
-          
-          // Update ticket status to ACTIVE
-          const activatedTicket = await tx.ticket.update({
-            where: { id: ticket.id },
-            data: { 
-              status: TicketStatus.ACTIVE,
-              qrCodePath: qrPath 
-            },
-          });
-          
-          activatedTickets.push(activatedTicket);
-        } catch (error) {
-          logger.error(`Failed to activate ticket ${ticket.id}:`, error);
-          throw new AppError(500, `Failed to activate ticket ${ticket.ticketCode}`);
-        }
+      if (!order) {
+        throw new AppError(404, 'Order not found');
       }
 
-      // Create notifications for admins
-      const admins = await tx.user.findMany({
-        where: {
-          role: { in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
-          isActive: true,
-        },
-        select: { id: true },
-      });
+      if (order.status === OrderStatus.COMPLETED) {
+        throw new AppError(400, 'Order already completed');
+      }
 
-      // Notify all admins
-      for (const admin of admins) {
-        await tx.notification.create({
+      const updatedOrder = await prisma.$transaction(async (tx) => {
+        const updated = await tx.order.update({
+          where: { id: orderId },
           data: {
-            userId: admin.id,
-            title: 'Payment Confirmed',
-            message: `Payment confirmed for order ${order.orderNumber} from ${order.customer.firstName} ${order.customer.lastName}`,
-            type: 'SUCCESS',
+            status: OrderStatus.COMPLETED,
+            paymentStatus: 'paid',
+            paidAt: new Date(),
+            paidAmount: data.paidAmount,
+            paymentReference: data.paymentReference,
+            paymentMethod: data.paymentMethod,
+          },
+          include: {
+            customer: true,
+            tickets: true,
           },
         });
-      }
 
-      return { ...updated, tickets: activatedTickets };
-    });
+        await tx.customer.update({
+          where: { id: order.customerId },
+          data: {
+            totalOrders: { increment: 1 },
+            totalSpent: { increment: order.amount },
+            lastPurchase: new Date(),
+          },
+        });
 
-    // Queue receipt email
-    await emailQueue.add('payment-receipt', {
-      orderId: updatedOrder.id,
-      customerEmail: order.customer.email,
-      orderNumber: updatedOrder.orderNumber,
-      paymentReference: data.paymentReference,
-      tickets: updatedOrder.tickets,
-    });
+        const activatedTickets = [];
+        for (const ticket of order.tickets) {
+          try {
+          
+            const qrPath = await this.generateQRForTicket(ticket, order);
+            
+            const activatedTicket = await tx.ticket.update({
+              where: { id: ticket.id },
+              data: { 
+                status: TicketStatus.ACTIVE,
+                qrCodePath: qrPath 
+              },
+            });
+            
+            activatedTickets.push(activatedTicket);
+          } catch (error) {
+            logger.error(`Failed to activate ticket ${ticket.id}:`, error);
+            throw new AppError(500, `Failed to activate ticket ${ticket.ticketCode}`);
+          }
+        }
 
-    // Log in immutable audit
-    await immutableAuditService.createLog({
-      userId,
-      action: 'PAYMENT_CONFIRMED',
-      entity: 'ORDER',
-      entityId: orderId,
-      ipAddress,
-      metadata: {
-        orderNumber: order.orderNumber,
+        const admins = await tx.user.findMany({
+          where: {
+            role: { in: [UserRole.ADMIN, UserRole.SUPER_ADMIN] },
+            isActive: true,
+          },
+          select: { id: true },
+        });
+
+        for (const admin of admins) {
+          await tx.notification.create({
+            data: {
+              userId: admin.id,
+              title: 'Payment Confirmed',
+              message: `Payment confirmed for order ${order.orderNumber} from ${order.customer.firstName} ${order.customer.lastName}`,
+              type: 'SUCCESS',
+            },
+          });
+        }
+
+        return { ...updated, tickets: activatedTickets };
+      });
+
+      await emailQueue.add('payment-receipt', {
+        orderId: updatedOrder.id,
+        customerEmail: order.customer.email,
+        orderNumber: updatedOrder.orderNumber,
         paymentReference: data.paymentReference,
+        tickets: updatedOrder.tickets,
+      });
+
+      await immutableAuditService.createLog({
+        userId,
+        action: 'PAYMENT_CONFIRMED',
+        entity: 'ORDER',
+        entityId: orderId,
+        ipAddress,
+        metadata: {
+          orderNumber: order.orderNumber,
+          paymentReference: data.paymentReference,
+          amount: data.paidAmount,
+          paymentMethod: data.paymentMethod,
+          customerId: order.customerId,
+          ticketsActivated: updatedOrder.tickets.length
+        }
+      });
+
+      logger.info(`Payment confirmed for order: ${order.orderNumber}`, {
+        orderId,
         amount: data.paidAmount,
-        paymentMethod: data.paymentMethod,
-        customerId: order.customerId,
         ticketsActivated: updatedOrder.tickets.length
-      }
-    });
+      });
 
-    logger.info(`Payment confirmed for order: ${order.orderNumber}`, {
-      orderId,
-      amount: data.paidAmount,
-      ticketsActivated: updatedOrder.tickets.length
-    });
+      await Promise.all([
+        invalidateCache(`api:/orders/${orderId}*`),
+        invalidateCache('api:/analytics/*'),
+        invalidateCache(`api:/customers/${order.customerId}*`)
+      ]);
 
-    // Invalidate caches
-    await Promise.all([
-      invalidateCache(`api:/orders/${orderId}*`),
-      invalidateCache('api:/analytics/*'),
-      invalidateCache(`api:/customers/${order.customerId}*`)
-    ]);
-
-    return updatedOrder;
+      return updatedOrder;
+    } catch (error) {
+        if (error.code === 'P2034') {
+          throw new AppError(409, 'Transaction conflict, please retry');
+        }
+        throw error;
+    }
+    
   }
 
   async cancelOrder(orderId: string, reason?: string, userId?: string, ipAddress?: string) {

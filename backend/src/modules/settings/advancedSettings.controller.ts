@@ -54,7 +54,6 @@ export const getActiveSessions = asyncHandler(async (req: Request, res: Response
 
 
 export const terminateSession = asyncHandler(async (req: Request, res: Response) => {
- 
   const targetSession = await prisma.activeSession.findUnique({
     where: { id: req.params.sessionId }
   });
@@ -62,7 +61,6 @@ export const terminateSession = asyncHandler(async (req: Request, res: Response)
   if (!targetSession) {
     throw new AppError(404, 'Session not found');
   }
-  
   const isSuperAdmin = req.user?.role === UserRole.SUPER_ADMIN;
   const isOwnSession = targetSession.userId === req.user?.userId;
   
@@ -72,7 +70,7 @@ export const terminateSession = asyncHandler(async (req: Request, res: Response)
   
   const result = await settingsService.terminateSession(
     req.params.sessionId,
-    targetSession.userId // Use actual session owner
+    targetSession.userId
   );
   
   res.json(result);
