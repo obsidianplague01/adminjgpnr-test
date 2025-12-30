@@ -1,7 +1,9 @@
-// src/utils/cache.service.ts - PRODUCTION-READY VERSION
+// src/utils/cache.service.ts
 import redis from '../config/cache';
 import prisma from '../config/database';
 import { logger } from './logger';
+import { monitoring } from './monitoring.service';
+import crypto from 'crypto';
 
 export class CacheService {
   private readonly DEFAULT_TTL = 300; // 5 minutes
@@ -225,9 +227,9 @@ export class CacheService {
     const lockAcquired = await redis.set(
       lockKey, 
       lockValue, 
-      'NX', 
-      'PX', 
-      10000 
+      'EX',
+      10,
+      'NX'
     );
     
     if (!lockAcquired) {

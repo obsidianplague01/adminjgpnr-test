@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as auditController from './audit.controller';
-import { authenticate, authorize } from '../../middleware/auth';
+import { authenticate, authorize, requireAdmin } from '../../middleware/auth';
 import { UserRole } from '@prisma/client';
 
 const router = Router();

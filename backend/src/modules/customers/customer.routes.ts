@@ -1,90 +1,87 @@
 import { Router } from 'express';
 import * as customerController from './customer.controller';
-import { authenticate, authorize } from '../../middleware/auth';
+import { authenticate, requireAdmin, requireStaff } from '../../middleware/auth';
 import { validate, schemas } from '../../middleware/validate';
 import { uploadMiddleware } from '../../middleware/upload';
-import { UserRole } from '@prisma/client';
 
 const router = Router();
 
 router.use(authenticate);
 
 router.get('/stats',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   customerController.getCustomerStats
 );
 
 router.get('/top',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   customerController.getTopCustomers
 );
 
 router.get('/search',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   customerController.searchCustomers
 );
 
 router.get('/',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   customerController.listCustomers
 );
 
 router.post('/',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   validate(schemas.createCustomer),
   customerController.createCustomer
 );
 
 router.get(
   '/:id',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   validate(schemas.idParam),
   customerController.getCustomer
 );
 
-
-
 router.put('/:id',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   validate(schemas.updateCustomer),
   customerController.updateCustomer
 );
 
 router.delete('/:id',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   customerController.deleteCustomer
 );
 
 router.post('/:id/deactivate',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   validate(schemas.customerStatusChange),
   customerController.deactivateCustomer
 );
 
 router.post('/:id/reactivate',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   validate(schemas.customerStatusChange),
   customerController.reactivateCustomer
 );
 
 router.get('/:id/orders',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   customerController.getCustomerOrders
 );
 
 router.post('/:id/document',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   uploadMiddleware.single('document'),
   customerController.uploadDocument
 );
 
 router.get('/:id/document',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.STAFF]),
+  requireStaff,
   customerController.downloadDocument
 );
 
 router.delete('/:id/document',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   customerController.deleteDocument
 );
 

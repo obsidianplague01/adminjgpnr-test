@@ -87,7 +87,25 @@ export const changePasswordSchema = z.object({
     id: z.string().cuid('Invalid user ID format'),
   }),
 });
+export const forgotPasswordSchema = z.object({
+  body: z.object({
+    email: z.string().email('Invalid email format').toLowerCase().trim(),
+  }),
+});
 
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    token: z.string().min(1, 'Reset token required'),
+    newPassword: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .max(100)
+      .regex(
+        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+        'Password must contain uppercase, lowercase, and number'
+      ),
+  }),
+});
 export type LoginInput = z.infer<typeof loginSchema>['body'];
 export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>['body'];
 export type CreateUserInput = z.infer<typeof createUserSchema>['body'];

@@ -110,7 +110,7 @@ export class AuditLogger {
     try {
       await prisma.auditLog.create({
         data: {
-          userId: params.context.userId,
+          userId: params.context.userId || 'system',
           action: params.action,
           entity: params.entity,
           entityId: params.entityId,

@@ -21,6 +21,7 @@ if (!/^[0-9a-fA-F]{64}$/.test(process.env.QR_ENCRYPTION_KEY)) {
 
 
 const IV_LENGTH = 16;
+const ENCRYPTION_KEY = Buffer.from(process.env.QR_ENCRYPTION_KEY!, 'hex');
 const ALGORITHM = 'aes-256-cbc';
 
 export const generateTicketCode = (): string => {

@@ -1,10 +1,9 @@
 // src/modules/orders/order.routes.ts
 import express from 'express';
-import { authenticate, authorize } from '../../middleware/auth';
+import { authenticate, requireAdmin, requireStaff, requireSuperAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { apiLimiter } from '../../middleware/rateLimit';
 import { csrfProtection } from '../../middleware/csrf';
-import { UserRole } from '@prisma/client';
 import * as orderController from './order.controller';
 import * as orderSchema from './order.schema';
 import { fileDownloadLimiter } from '../../middleware/rateLimit';
@@ -57,7 +56,7 @@ router.get(
 
 router.post(
   '/',
-  authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireStaff,
   csrfProtection,
   apiLimiter, 
   validate(orderSchema.createOrderSchema),
@@ -66,7 +65,7 @@ router.post(
 
 router.patch(
   '/:id',
-  authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireStaff,
   csrfProtection,
   apiLimiter,
   validate(orderSchema.updateOrderSchema),
@@ -75,7 +74,7 @@ router.patch(
 
 router.post(
   '/:id/confirm-payment',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   csrfProtection,
   apiLimiter,
   validate(orderSchema.confirmPaymentSchema),
@@ -84,7 +83,7 @@ router.post(
 
 router.post(
   '/:id/cancel',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   csrfProtection,
   apiLimiter,
   orderController.cancelOrder
@@ -92,7 +91,7 @@ router.post(
 
 router.post(
   '/:id/resend-confirmation',
-  authorize([UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireStaff,
   csrfProtection,
   apiLimiter,
   orderController.resendConfirmation
@@ -100,28 +99,28 @@ router.post(
 
 router.get(
   '/stats/overview',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
- apiLimiter,
+  requireAdmin,
+  apiLimiter,
   orderController.getOrderStats
 );
 
 router.get(
   '/analytics/revenue',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   apiLimiter,
   orderController.getRevenueBreakdown
 );
 
 router.get(
   '/export/csv',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   apiLimiter,
   orderController.exportOrdersCSV
 );
 
 router.post(
   '/bulk',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   csrfProtection,
   apiLimiter, 
   orderController.bulkCreateOrders
@@ -129,7 +128,7 @@ router.post(
 
 router.post(
   '/:id/refund',
-  authorize([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+  requireAdmin,
   csrfProtection,
   apiLimiter,
   orderController.refundOrder
@@ -137,7 +136,7 @@ router.post(
 
 router.post(
   '/:id/mark-fraud',
-  authorize([UserRole.SUPER_ADMIN]), // Super admin only
+  requireSuperAdmin,
   csrfProtection,
   apiLimiter,
   orderController.markAsFraud
@@ -149,4 +148,5 @@ router.post('/:id/tickets/download',
   fileDownloadLimiter,
   orderController.downloadTickets
 );
+
 export default router;

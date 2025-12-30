@@ -2,6 +2,7 @@
 import axios from 'axios';
 import { logger } from './logger';
 import { cacheService } from './cache.service';
+import prisma from '../config/database';
 
 interface GeolocationData {
   ip: string;

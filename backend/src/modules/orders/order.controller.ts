@@ -226,7 +226,6 @@ export const exportOrdersCSV = asyncHandler(async (req: Request, res: Response) 
 export const getRevenueBreakdown = asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate, groupBy = 'day' } = req.query;
   
-  // TODO: Implement detailed revenue analytics
   const stats = await orderService.getOrderStats(
     startDate as string,
     endDate as string
@@ -241,10 +240,7 @@ export const getRevenueBreakdown = asyncHandler(async (req: Request, res: Respon
   });
 });
 
-export const refundOrder = asyncHandler(async (req: Request, res: Response) => {
-  const { reason, amount } = req.body;
-  
-  // TODO: Implement refund logic with payment provider
+export const refundOrder = asyncHandler(async (req: Request, _res: Response) => {
   throw new AppError(501, 'Refund functionality not yet implemented');
 });
 

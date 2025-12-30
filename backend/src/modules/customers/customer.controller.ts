@@ -31,13 +31,6 @@ export const listCustomers = asyncHandler(async (req: Request, res: Response) =>
 
 export const getCustomer = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-
-  if (req.user.role === UserRole.CUSTOMER) {
-    if (req.user.userId !== id) {
-      throw new AppError(403, 'Access denied');
-    }
-  }
-  
   const customer = await customerService.getCustomer(id);
   res.json(customer);
 });

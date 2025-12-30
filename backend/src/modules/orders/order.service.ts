@@ -149,7 +149,7 @@ export class OrderService {
                 data: {
                   ticketCode,
                   orderId: newOrder.id,
-                  gameSession: data.gameSession,
+                  gameSession: data.gameSession || 'Default Session',
                   validUntil,
                   maxScans: settings.maxScanCount,
                   scanWindow: settings.scanWindowDays,
@@ -532,7 +532,7 @@ export class OrderService {
 
       return updatedOrder;
     } catch (error) {
-        if (error.code === 'P2034') {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'P2034') {
           throw new AppError(409, 'Transaction conflict, please retry');
         }
         throw error;

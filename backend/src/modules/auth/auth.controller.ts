@@ -149,7 +149,7 @@ export const listUsers = asyncHandler(async (req: Request, res: Response) => {
     status,
     tokenVersion: 0,
   });
-  
+
   
   res.json(result);
 });
@@ -270,6 +270,28 @@ export const disable2FA = asyncHandler(async (req: Request, res: Response) => {
   
   logger.info('2FA disabled', {
     userId: req.user!.userId,
+    ip: req.ip,
+  });
+  
+  res.json(result);
+});
+export const requestPasswordReset = asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body;
+  const result = await authService.requestPasswordReset(email);
+  
+  logger.info('Password reset requested', {
+    email,
+    ip: req.ip,
+  });
+  
+  res.json(result);
+});
+
+export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
+  const { token, newPassword } = req.body;
+  const result = await authService.resetPassword(token, newPassword);
+  
+  logger.info('Password reset completed', {
     ip: req.ip,
   });
   

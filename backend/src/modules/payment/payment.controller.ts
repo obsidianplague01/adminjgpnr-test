@@ -17,6 +17,6 @@ export const verifyPayment = asyncHandler(async (req: Request, res: Response) =>
 
 export const handleWebhook = asyncHandler(async (req: Request, res: Response) => {
   const signature = req.headers['x-paystack-signature'] as string;
-  const result = await paymentService.handleWebhook(req.body, signature);
+  const result = await paymentService.handleWebhook(req.body, signature, req);  // Add req
   res.json(result);
 });

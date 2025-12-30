@@ -4,10 +4,10 @@ import axios from 'axios';
 import { PrismaClient, OrderStatus, TicketStatus } from '@prisma/client';
 import { logger } from '../../utils/logger';
 import { AppError } from '../../middleware/errorHandler';
-import { redis } from '../config/redis';
-import { emailService } from './email.service';
-import { immutableAuditService } from './immutableAudit.service';
-import { ticketService } from './ticket.service';
+import redis from '../../config/cache';
+import { emailService } from '../../utils/email.service';
+import { immutableAuditService } from '../../services/immutableAudit.service';
+import { ticketService } from '../tickets/ticket.service';
 import { Request } from 'express';
 
 const prisma = new PrismaClient();
@@ -48,14 +48,12 @@ interface WebhookPayload {
 
 export class PaymentService {
   private readonly paystackSecretKey: string;
-  private readonly paystackPublicKey: string;
   private readonly paystackBaseUrl = 'https://api.paystack.co';
   private readonly webhookIdempotencyTTL = 604800; 
   private readonly maxWebhookAge = 48; 
 
   constructor() {
     this.paystackSecretKey = process.env.PAYSTACK_SECRET_KEY || '';
-    this.paystackPublicKey = process.env.PAYSTACK_PUBLIC_KEY || '';
 
     if (!this.paystackSecretKey) {
       throw new Error('PAYSTACK_SECRET_KEY is not configured');

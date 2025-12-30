@@ -1,6 +1,9 @@
 import { Request, Response } from 'express';
 import { AdvancedSettingsService } from './advancedSettings.service';
 import { asyncHandler } from '../../middleware/errorHandler';
+import prisma from '../../config/database';
+import { AppError } from '../../middleware/errorHandler';
+import { UserRole } from '@prisma/client';
 
 const settingsService = new AdvancedSettingsService();
 
@@ -61,6 +64,7 @@ export const terminateSession = asyncHandler(async (req: Request, res: Response)
   if (!targetSession) {
     throw new AppError(404, 'Session not found');
   }
+  
   const isSuperAdmin = req.user?.role === UserRole.SUPER_ADMIN;
   const isOwnSession = targetSession.userId === req.user?.userId;
   

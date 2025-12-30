@@ -1,5 +1,5 @@
 // src/modules/auth/auth.service.ts
-import jwt, { SignOptions } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import { accountLockout } from '../../middleware/rateLimit';
 import bcrypt from 'bcrypt';
 import prisma from '../../config/database';
