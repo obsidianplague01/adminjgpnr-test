@@ -155,7 +155,11 @@ export class PaymentService {
       throw error;
     }
   }
-
+  private async addJitter(): Promise<void> {
+    const jitter = 100 + Math.floor(Math.random() * 100);
+    await new Promise(resolve => setTimeout(resolve, jitter));
+  }
+  
   private async verifyWebhookSignature(signature: string, req: Request): Promise<void> {
     const rawBody = (req as any).rawBody;
     if (!rawBody) {
@@ -166,20 +170,25 @@ export class PaymentService {
       .createHmac('sha512', this.paystackSecretKey)
       .update(rawBody)
       .digest('hex');
-
-    const signatureBuffer = Buffer.alloc(128);
-    const hashBuffer = Buffer.alloc(128);
-    
-    Buffer.from(signature, 'utf8').copy(signatureBuffer);
-    Buffer.from(hash, 'utf8').copy(hashBuffer);
-
-    if (!crypto.timingSafeEqual(signatureBuffer, hashBuffer)) {
-    
-      await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 100));
+    if (signature.length !== hash.length) {
+      await this.addJitter();
       throw new AppError(401, 'Invalid webhook signature');
     }
-  }
 
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const hashBuffer = Buffer.from(hash, 'hex');
+
+    if (signatureBuffer.length !== hashBuffer.length) {
+      await this.addJitter();
+      throw new AppError(401, 'Invalid webhook signature');
+    }
+    if (!crypto.timingSafeEqual(signatureBuffer, hashBuffer)) {
+      await this.addJitter();
+      throw new AppError(401, 'Invalid webhook signature');
+    }
+
+  }
+  
   private async checkIdempotency(event: string, reference: string): Promise<boolean> {
     const idempotencyKey = `webhook:${event}:${reference}`;
     const status = await redis.get(idempotencyKey);
@@ -312,19 +321,29 @@ export class PaymentService {
         };
       }
 
-      // Verify amount
-      const expectedAmount = Math.round(parseFloat(order.amount.toString()) * 100); // Convert to kobo
+      const expectedAmount = Math.round(parseFloat(order.amount.toString()) * 100);
       const paidAmount = data.amount;
 
+      const maxAllowed = Math.ceil(expectedAmount * 1.01);
+
+
       if (paidAmount < expectedAmount) {
-        logger.error('Payment amount mismatch', {
-          reference,
-          expected: expectedAmount,
-          received: paidAmount
-        });
-        throw new AppError(400, 'Payment amount mismatch');
+        await this.logPaymentMismatch(order, expectedAmount, paidAmount, 'underpayment');
+        throw new AppError(400, `Insufficient payment: expected ₦${expectedAmount/100}, received ₦${paidAmount/100}`);
       }
 
+      if (paidAmount > maxAllowed) {
+        await this.logPaymentMismatch(order, expectedAmount, paidAmount, 'overpayment');
+        throw new AppError(400, `Overpayment detected: expected ₦${expectedAmount/100}, received ₦${paidAmount/100}`);
+      }
+      if (paidAmount !== expectedAmount) {
+        logger.warn('Payment amount variance within tolerance', {
+          orderId: order.id,
+          expected: expectedAmount,
+          received: paidAmount,
+          variance: paidAmount - expectedAmount
+        });
+      }
       const activatedTickets = await Promise.all(
         order.tickets.map(async (ticket) => {
           if (ticket.status === TicketStatus.PENDING) {
@@ -765,7 +784,10 @@ export class PaymentService {
     }
 
     if (order.status !== OrderStatus.COMPLETED) {
-      throw new AppError(400, 'Only completed orders can be refunded');
+      const message = process.env.NODE_ENV === 'production'
+        ? 'Refund not available for this order'
+        : `Only completed orders can be refunded (status: ${order.status})`;
+      throw new AppError(400, message);
     }
 
     if (!order.paymentReference) {

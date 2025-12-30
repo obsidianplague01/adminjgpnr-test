@@ -14,17 +14,27 @@ const validateEncryptionKey = () => {
   if (!key || !/^[0-9a-fA-F]{64}$/.test(key)) {
     throw new Error('QR_ENCRYPTION_KEY must be 64 character hex');
   }
-  
-  // Check entropy
   const uniqueChars = new Set(key.toLowerCase().split('')).size;
-  if (uniqueChars < 10) {
-    throw new Error('QR_ENCRYPTION_KEY has insufficient entropy');
+  if (uniqueChars < 14) {
+    throw new Error('QR_ENCRYPTION_KEY has insufficient entropy (min 14 unique chars)');
+  }
+  const charFreq = new Map<string, number>();
+  for (const char of key.toLowerCase()) {
+    charFreq.set(char, (charFreq.get(char) || 0) + 1);
   }
   
-  // Prevent common weak keys
-  const weakPatterns = ['0'.repeat(64), 'f'.repeat(64), '0123456789abcdef'.repeat(4)];
-  if (weakPatterns.some(p => key.toLowerCase() === p)) {
-    throw new Error('QR_ENCRYPTION_KEY is too predictable');
+  let entropy = 0;
+  for (const count of charFreq.values()) {
+    const p = count / key.length;
+    entropy -= p * Math.log2(p);
+  }
+  if (entropy < 3.5) {
+    throw new Error(`QR_ENCRYPTION_KEY entropy too low: ${entropy.toFixed(2)} (min 3.5)`);
+  }
+  
+  const sequential = ['0123456789abcdef'.repeat(4), 'fedcba9876543210'.repeat(4)];
+  if (sequential.some(s => key.toLowerCase().includes(s.substring(0, 16)))) {
+    throw new Error('QR_ENCRYPTION_KEY contains predictable patterns');
   }
 };
 

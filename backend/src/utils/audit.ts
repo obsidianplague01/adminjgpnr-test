@@ -103,9 +103,6 @@ interface AuditLogParams {
 }
 
 export class AuditLogger {
-  /**
-   * Create audit log entry
-   */
   static async log(params: AuditLogParams): Promise<void> {
     try {
       await prisma.auditLog.create({
@@ -138,9 +135,6 @@ export class AuditLogger {
     }
   }
 
-  /**
-   * Extract context from Express request
-   */
   static getContextFromRequest(req: any): AuditContext {
     return {
       userId: req.user?.userId,
@@ -152,9 +146,6 @@ export class AuditLogger {
     };
   }
 
-  /**
-   * Log authentication events
-   */
   static async logAuth(
     action: AuditAction,
     context: AuditContext,
@@ -369,9 +360,6 @@ export class AuditLogger {
     return logs;
   }
 
-  /**
-   * Get entity history (all changes to a specific entity)
-   */
   static async getEntityHistory(
     entity: AuditEntity,
     entityId: string,
@@ -440,36 +428,57 @@ export class AuditLogger {
 
     return logs;
   }
-
-  /**
-   * Clean up old audit logs (for maintenance)
-   * Keep logs for specified number of days
-   */
+  
   static async cleanupOldLogs(daysToKeep: number = 90): Promise<number> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
 
+    const PERMANENT_RETENTION: AuditAction[] = [
+      AuditAction.LOGIN_FAILED,
+      AuditAction.PASSWORD_CHANGED,
+      AuditAction.PASSWORD_RESET,
+      AuditAction.USER_DELETED,
+      AuditAction.CUSTOMER_DELETED,
+      AuditAction.PAYMENT_SUCCESS,
+      AuditAction.PAYMENT_FAILED,
+      AuditAction.PAYMENT_DISPUTED,
+      AuditAction.REFUND_PROCESSED,
+      AuditAction.ORDER_CANCELLED,
+      AuditAction.TICKET_CANCELLED,
+      AuditAction.SESSION_TERMINATED,
+      AuditAction.USER_ROLE_CHANGED,
+      AuditAction.SETTINGS_CHANGED,
+      AuditAction.DATA_EXPORT,
+      AuditAction.BULK_OPERATION,
+    ];
+
+    const sevenYearsAgo = new Date();
+    sevenYearsAgo.setFullYear(sevenYearsAgo.getFullYear() - 7);
+
     const result = await prisma.auditLog.deleteMany({
       where: {
-        createdAt: {
-          lt: cutoffDate,
-        },
-        // ✅ Never delete security-related logs
-        action: {
-          notIn: [
-            AuditAction.LOGIN_FAILED,
-            AuditAction.PASSWORD_CHANGED,
-            AuditAction.PASSWORD_RESET,
-            AuditAction.USER_DELETED,
-            AuditAction.CUSTOMER_DELETED,
-          ],
-        },
+        AND: [
+          { createdAt: { lt: cutoffDate } },
+          { action: { notIn: PERMANENT_RETENTION } },
+          {
+            OR: [
+              { entity: { notIn: ['PAYMENT', 'ORDER', 'TICKET'] } },
+              { 
+                AND: [
+                  { entity: { in: ['PAYMENT', 'ORDER', 'TICKET'] } },
+                  { createdAt: { lt: sevenYearsAgo } }
+                ]
+              }
+            ]
+          }
+        ],
       },
     });
 
     logger.info(`Cleaned up ${result.count} old audit logs`, {
       cutoffDate: cutoffDate.toISOString(),
       daysToKeep,
+      protectedActions: PERMANENT_RETENTION.length,
     });
 
     return result.count;

@@ -6,6 +6,7 @@ import { Request, Response } from 'express';
 import { logger } from '../utils/logger';
 import prisma from '../config/database';
 import redis from '../config/cache';
+import crypto from 'crypto';
 
 const redisClient = createClient({
   url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,
@@ -79,20 +80,38 @@ export const apiLimiter: RateLimitRequestHandler = rateLimit({
     });
   },
 });
+const getClientIdentifier = (req: Request): string => {
+  const identifiers: string[] = [];
+  
+  const realIp = req.socket.remoteAddress || 'unknown';
+  identifiers.push(realIp);
+  
+  const fingerprint = req.headers['x-client-fingerprint'] as string;
+  if (fingerprint && /^[a-f0-9]{32}$/.test(fingerprint)) {
+    identifiers.push(fingerprint);
+  }
+  const ua = req.headers['user-agent'];
+  if (ua) {
+    const uaHash = crypto.createHash('sha256').update(ua).digest('hex').substring(0, 8);
+    identifiers.push(uaHash);
+  }
+  
+  return identifiers.join(':');
+};
 
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  
-  max: 5,                    
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   skipSuccessfulRequests: true,
-  message: 'Too many login attempts. Please try again in 15 minutes.',
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: createRedisStore('auth'),
+  keyGenerator: getClientIdentifier,
   handler: (req: Request, res: Response) => {
-    logger.warn(`Auth rate limit exceeded: ${req.ip}`, {
-      email: req.body.email,
-      userAgent: req.get('user-agent'),
+    logger.warn('Auth rate limit exceeded', {
+      identifier: getClientIdentifier(req),
+      ip: req.socket.remoteAddress,
+      path: req.path,
+      timestamp: new Date().toISOString()
     });
+    
     res.status(429).json({
       error: 'Too many authentication attempts',
       message: 'Please try again in 15 minutes',

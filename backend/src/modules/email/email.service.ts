@@ -17,23 +17,50 @@ export class EmailService {
  
   private sanitizeHTML(html: string): string {
     return sanitizeHtml(html, {
-      allowedTags: ['p', 'br', 'strong', 'em', 'u', 'a', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'span', 'div'],
+      allowedTags: [
+        'p', 'br', 'strong', 'em', 'u', 'a', 
+        'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'span'
+      ],
+
       allowedAttributes: {
         'a': ['href', 'target', 'rel'],
-        '*': ['class']
+        'span': ['style'], 
       },
+
       allowedSchemes: ['http', 'https', 'mailto'],
+      allowedSchemesByTag: {
+        'a': ['http', 'https', 'mailto']
+      },
+      allowedStyles: {
+        'span': {
+          'color': [/^#[0-9a-f]{6}$/i], // Only hex colors
+          'font-weight': [/^(bold|normal|[1-9]00)$/],
+          'font-style': [/^(italic|normal)$/],
+          'text-decoration': [/^(underline|none)$/]
+        }
+      },
       transformTags: {
         'a': (tagName, attribs) => {
           return {
             tagName: tagName,
             attribs: {
-              ...attribs,
-              rel: 'noopener noreferrer',
-              target: attribs.target === '_blank' ? '_blank' : ''
+              href: attribs.href,
+              rel: 'noopener noreferrer nofollow', 
+              target: '_blank'
             }
           };
         }
+      },
+      enforceHtmlBoundary: true,
+      exclusiveFilter: (frame) => {
+        const href = frame.attribs.href;
+        if (href && /^javascript:/i.test(href)) {
+          return true; 
+        }
+        if (href && /^data:/i.test(href)) {
+          return true; 
+        }
+        return false;
       }
     });
   }

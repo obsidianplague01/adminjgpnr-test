@@ -59,11 +59,17 @@ export class OrderService {
   }
 
   private generateOrderNumber(): string {
-    const hrTime = process.hrtime.bigint().toString(36).toUpperCase();
-    const random = crypto.randomBytes(8).toString('hex').toUpperCase();
-    const timestamp = Date.now().toString(36).toUpperCase();
+
+    const randomBytes = crypto.randomBytes(16);
+    const base32Chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let encoded = '';
     
-    return `ORD-${timestamp}-${hrTime}-${random}`;
+    for (let i = 0; i < randomBytes.length; i++) {
+      encoded += base32Chars[randomBytes[i] % base32Chars.length];
+    }
+    const chunks = encoded.match(/.{1,4}/g) || [];
+    return `ORD-${chunks.join('-')}`;
+    
   }
 
   private generateTicketCode(): string {
@@ -105,7 +111,14 @@ export class OrderService {
           const orderNumber = this.generateOrderNumber();
 
           order = await prisma.$transaction(async (tx) => {
-            
+          const exists = await prisma.order.findUnique({
+            where: { orderNumber },
+            select: { id: true }
+          });
+          if (exists) {
+            throw { code: 'P2002' }; 
+          }
+          
             const newOrder = await tx.order.create({
               data: {
                 orderNumber,
@@ -136,7 +149,7 @@ export class OrderService {
                   validUntil,
                   maxScans: settings.maxScanCount,
                   scanWindow: settings.scanWindowDays,
-                  status: TicketStatus.PENDING, // Pending until payment
+                  status: TicketStatus.PENDING, 
                 },
               });
 
@@ -145,17 +158,15 @@ export class OrderService {
 
             return { ...newOrder, tickets };
           }, {
-            timeout: 10000, // 10 second timeout
+            timeout: 10000,
             isolationLevel: 'Serializable'
           });
 
-          // Success - break the retry loop
           break;
 
         } catch (error: any) {
           attempts++;
 
-          // If unique constraint violation, retry with exponential backoff
           if (error.code === 'P2002' && attempts < maxAttempts) {
             const backoffMs = Math.pow(2, attempts) * 100;
             logger.warn(`Order number collision, retrying in ${backoffMs}ms (attempt ${attempts}/${maxAttempts})`);
@@ -163,7 +174,6 @@ export class OrderService {
             continue;
           }
 
-          // If max attempts reached or different error, throw
           throw error.code === 'P2002'
             ? new AppError(500, 'Failed to generate unique order number after multiple attempts')
             : error;
@@ -174,14 +184,12 @@ export class OrderService {
         throw new AppError(500, 'Order creation failed');
       }
 
-      // Invalidate relevant caches
       await Promise.all([
         invalidateCache('api:/analytics/*'),
         invalidateCache('api:/orders*'),
         invalidateCache(`api:/customers/${customer.id}*`)
       ]);
 
-      // Queue confirmation email
       await emailQueue.add('order-confirmation', {
         orderId: order.id,
         customerEmail: customer.email,
@@ -927,7 +935,12 @@ export class OrderService {
       const algorithm = 'aes-256-gcm';
       const key = Buffer.from(process.env.QR_ENCRYPTION_KEY!, 'hex');
       
-      const [ivHex, authTagHex, encrypted] = encryptedData.split(':');
+      const parts = encryptedData.split(':');
+      if (parts.length !== 3) {
+        throw new Error('FORMAT'); 
+      }
+
+      const [ivHex, authTagHex, encrypted] = parts;
       
       const iv = Buffer.from(ivHex, 'hex');
       const authTag = Buffer.from(authTagHex, 'hex');
@@ -939,9 +952,13 @@ export class OrderService {
       decrypted += decipher.final('utf8');
 
       return decrypted;
-    } catch (error) {
-      logger.error('QR decryption failed:', error);
-      throw new AppError(400, 'Invalid QR code');
+    } catch (error: any) {
+      const errorCode = error.message || 'UNKNOWN';
+      logger.warn('QR decryption failed', { 
+        errorCode,
+        timestamp: Date.now()
+      });
+      throw new AppError(400, 'Invalid or tampered QR code');
     }
   }
 
