@@ -158,43 +158,27 @@ export class PaymentService {
 
   private async verifyWebhookSignature(signature: string, req: Request): Promise<void> {
     const rawBody = (req as any).rawBody;
-
     if (!rawBody) {
-      logger.error('Raw body not available for webhook verification');
-      throw new AppError(500, 'Server configuration error: Raw body unavailable');
+      throw new AppError(500, 'Raw body unavailable');
     }
 
-    // Generate expected hash
     const hash = crypto
       .createHmac('sha512', this.paystackSecretKey)
       .update(rawBody)
       .digest('hex');
 
-    // Convert to buffers for timing-safe comparison
-    const signatureBuffer = Buffer.from(signature, 'utf8');
-    const hashBuffer = Buffer.from(hash, 'utf8');
+    const signatureBuffer = Buffer.alloc(128);
+    const hashBuffer = Buffer.alloc(128);
+    
+    Buffer.from(signature, 'utf8').copy(signatureBuffer);
+    Buffer.from(hash, 'utf8').copy(hashBuffer);
 
-    // Validate length
-    if (signatureBuffer.length !== hashBuffer.length) {
-      logger.warn('Webhook signature length mismatch', {
-        expected: hashBuffer.length,
-        received: signatureBuffer.length
-      });
-      throw new AppError(401, 'Invalid webhook signature');
-    }
-
-    // Timing-safe comparison
     if (!crypto.timingSafeEqual(signatureBuffer, hashBuffer)) {
-      logger.warn('Webhook signature verification failed', {
-        signaturePrefix: signature.substring(0, 10),
-        ipAddress: req.ip
-      });
+    
+      await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 100));
       throw new AppError(401, 'Invalid webhook signature');
     }
-
-    logger.info('Webhook signature verified successfully');
   }
-
 
   private async checkIdempotency(event: string, reference: string): Promise<boolean> {
     const idempotencyKey = `webhook:${event}:${reference}`;
@@ -289,10 +273,17 @@ export class PaymentService {
   }
 
   private async handleSuccessfulPayment(data: any, ipAddress?: string) {
+     logger.info('Payment webhook received', {
+      reference: data.reference,
+      amount: data.amount / 100,
+      channel: data.authorization?.channel,
+      ipAddress,
+      timestamp: new Date().toISOString()
+    });
     const reference = data.reference;
 
     return await prisma.$transaction(async (tx) => {
-      // Find the order
+      
       const order = await tx.order.findFirst({
         where: { 
           OR: [
@@ -381,7 +372,15 @@ export class PaymentService {
         amount: paidAmount / 100,
         ticketsActivated: activatedTickets.length
       });
-
+      logger.info('Payment processed successfully', {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        reference: data.reference,
+        amount: paidAmount / 100,
+        ticketsActivated: activatedTickets.length,
+        processingTime: Date.now(),
+        customerEmail: order.customer.email
+      });
       return {
         message: 'Payment processed successfully',
         orderId: order.id,
@@ -389,6 +388,7 @@ export class PaymentService {
         ticketsActivated: activatedTickets.length
       };
     });
+    
   }
 
   private async handleFailedPayment(data: any, ipAddress?: string) {

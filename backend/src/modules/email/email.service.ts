@@ -11,23 +11,33 @@ import {
   SendEmailInput,
   CreateCampaignInput,
 } from './email.schema';
-import DOMPurify from 'dompurify';
-import { JSDOM } from 'jsdom';
-
-const window = new JSDOM('').window;
-const purify = DOMPurify(window as any);
+import sanitizeHtml from 'sanitize-html';
 
 export class EmailService {
+ 
   private sanitizeHTML(html: string): string {
-    return purify.sanitize(html, {
-      ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 'a', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'span', 'div'],
-      ALLOWED_ATTR: ['href', 'target', 'style', 'class'],
+    return sanitizeHtml(html, {
+      allowedTags: ['p', 'br', 'strong', 'em', 'u', 'a', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'span', 'div'],
+      allowedAttributes: {
+        'a': ['href', 'target', 'rel'],
+        '*': ['class']
+      },
+      allowedSchemes: ['http', 'https', 'mailto'],
+      transformTags: {
+        'a': (tagName, attribs) => {
+          return {
+            tagName: tagName,
+            attribs: {
+              ...attribs,
+              rel: 'noopener noreferrer',
+              target: attribs.target === '_blank' ? '_blank' : ''
+            }
+          };
+        }
+      }
     });
   }
 
-  /**
-   * Create email template
-   */
   async createTemplate(data: CreateTemplateInput) {
     const sanitizedBody = this.sanitizeHTML(data.body);
 

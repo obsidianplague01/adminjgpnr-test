@@ -9,20 +9,33 @@ import { logger } from './logger';
 if (!process.env.QR_ENCRYPTION_KEY) {
   throw new Error('QR_ENCRYPTION_KEY is required');
 }
+const validateEncryptionKey = () => {
+  const key = process.env.QR_ENCRYPTION_KEY;
+  if (!key || !/^[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error('QR_ENCRYPTION_KEY must be 64 character hex');
+  }
+  
+  // Check entropy
+  const uniqueChars = new Set(key.toLowerCase().split('')).size;
+  if (uniqueChars < 10) {
+    throw new Error('QR_ENCRYPTION_KEY has insufficient entropy');
+  }
+  
+  // Prevent common weak keys
+  const weakPatterns = ['0'.repeat(64), 'f'.repeat(64), '0123456789abcdef'.repeat(4)];
+  if (weakPatterns.some(p => key.toLowerCase() === p)) {
+    throw new Error('QR_ENCRYPTION_KEY is too predictable');
+  }
+};
 
-const keyBuffer = Buffer.from(process.env.QR_ENCRYPTION_KEY, 'hex');
-if (keyBuffer.length !== 32) {
-  throw new Error('QR_ENCRYPTION_KEY must be 64 character hex (32 bytes)');
-}
-
-if (!/^[0-9a-fA-F]{64}$/.test(process.env.QR_ENCRYPTION_KEY)) {
-  throw new Error('QR_ENCRYPTION_KEY must be 64 character hex string');
-}
+validateEncryptionKey();
 
 
 const IV_LENGTH = 16;
 const ENCRYPTION_KEY = Buffer.from(process.env.QR_ENCRYPTION_KEY!, 'hex');
 const ALGORITHM = 'aes-256-cbc';
+
+
 
 export const generateTicketCode = (): string => {
   const year = new Date().getFullYear();

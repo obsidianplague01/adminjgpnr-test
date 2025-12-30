@@ -93,18 +93,34 @@ export const authenticate = async (
       return;
     }
 
-    // Token version check
-    if (decoded.tokenVersion !== undefined && user.tokenVersion !== decoded.tokenVersion) {
-      logger.warn('Token version mismatch', { 
-        userId: user.id,
-        expected: user.tokenVersion,
-        received: decoded.tokenVersion
-      });
-      res.status(401).json({ error: 'Token has been invalidated' });
+
+   if (decoded.tokenVersion !== user.tokenVersion) {
+    
+      if (decoded.iat) {
+        const tokenIssuedDate = new Date(decoded.iat * 1000); 
+        
+        const versionChangeLog = await prisma.auditLog.findFirst({
+          where: {
+            userId: user.id,
+            action: 'PASSWORD_CHANGED',
+            createdAt: { 
+              gte: tokenIssuedDate
+            }
+          }
+        });
+        
+        if (versionChangeLog && decoded.exp) { 
+          const remainingTTL = Math.max(0, decoded.exp - Math.floor(Date.now() / 1000));
+            
+          if (remainingTTL > 0) {
+            await blacklistToken(token, remainingTTL);
+          }
+        }
+      }
+      
+      res.status(401).json({ error: 'Token invalidated due to password change' });
       return;
     }
-
-    // Active status check
     if (!user.isActive) {
       logger.warn('Inactive user attempted access', { 
         userId: user.id,

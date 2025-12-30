@@ -124,23 +124,31 @@ export const deleteDocument = asyncHandler(async (req: Request, res: Response) =
 export const downloadDocument = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const context = extractAuditContext(req);
+  
   if (!req.user) {
     throw new AppError(401, 'Authentication required');
   }
   
   const customer = await prisma.customer.findUnique({
     where: { id },
-    select: { id: true, documentPath: true }
+    select: { id: true, documentPath: true, email: true }
   });
   
   if (!customer) {
     throw new AppError(404, 'Customer not found');
   }
-  const isAdmin = req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
-  const isOwnDocument = req.user.userId === id;
   
-  if (!isAdmin && !isOwnDocument) {
-    throw new AppError(403, 'Access denied');
+  const isAdmin = req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+  
+  if (!isAdmin) {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { email: true }
+    });
+    
+    if (!user || user.email !== customer.email) {
+      throw new AppError(403, 'Access denied - not your document');
+    }
   }
   
   const document = await customerService.getDocument(id, context);

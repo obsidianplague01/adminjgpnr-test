@@ -43,25 +43,12 @@ function generateSecureCode(length: number, charset: string): string {
 }
 
 export class OrderService {
-  private orderCounter: number = 0;
   private readonly qrCodeDir = path.join(process.cwd(), 'uploads', 'qrcodes');
 
   constructor() {
     this.ensureQRDirectory();
-    this.initializeOrderCounter();
   }
 
-  private async initializeOrderCounter() {
-    const latestOrder = await prisma.order.findFirst({
-      orderBy: { createdAt: 'desc' },
-      select: { orderNumber: true }
-    });
-    
-    if (latestOrder) {
-      const match = latestOrder.orderNumber.match(/-(\d+)-/);
-      this.orderCounter = match ? parseInt(match[1]) + 1 : 0;
-    }
-  }
 
   private async ensureQRDirectory() {
     try {
@@ -71,13 +58,12 @@ export class OrderService {
     }
   }
 
- private generateOrderNumber(): string {
-  
+  private generateOrderNumber(): string {
     const hrTime = process.hrtime.bigint().toString(36).toUpperCase();
-    const random = crypto.randomBytes(8).toString('hex').toUpperCase(); // More bytes
-    const counter = this.orderCounter++; // Add in-memory counter
+    const random = crypto.randomBytes(8).toString('hex').toUpperCase();
+    const timestamp = Date.now().toString(36).toUpperCase();
     
-    return `ORD-${hrTime}-${counter.toString(36).toUpperCase()}-${random}`;
+    return `ORD-${timestamp}-${hrTime}-${random}`;
   }
 
   private generateTicketCode(): string {
@@ -95,7 +81,7 @@ export class OrderService {
     });
 
     try {
-      // Validate customer exists
+      
       const customer = await prisma.customer.findUnique({
         where: { id: data.customerId },
       });
@@ -104,15 +90,12 @@ export class OrderService {
         throw new AppError(404, 'Customer not found');
       }
 
-      // Get geolocation if IP provided
       const location = ipAddress 
         ? await geolocationService.getLocation(ipAddress)
         : null;
 
-      // Get ticket settings
       const settings = await ticketService.getSettings();
 
-      // Create order with retry logic OUTSIDE transaction
       let order;
       let attempts = 0;
       const maxAttempts = 3;
@@ -122,7 +105,7 @@ export class OrderService {
           const orderNumber = this.generateOrderNumber();
 
           order = await prisma.$transaction(async (tx) => {
-            // Create the order
+            
             const newOrder = await tx.order.create({
               data: {
                 orderNumber,
@@ -138,7 +121,7 @@ export class OrderService {
               },
             });
 
-            // Create tickets for this order
+          
             const tickets = [];
             
             for (let i = 0; i < data.quantity; i++) {

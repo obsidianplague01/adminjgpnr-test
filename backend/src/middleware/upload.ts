@@ -38,8 +38,19 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (_req, file, cb) => {
-    const sanitized = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, `${Date.now()}-${sanitized}`);
+
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      return cb(new Error('Invalid file extension'),'');
+    }
+    const randomName = crypto.randomBytes(16).toString('hex');
+    const safeFilename = `${Date.now()}-${randomName}${ext}`;
+    
+    if (safeFilename !== path.basename(safeFilename)) {
+      return cb(new Error('Invalid filename detected'),'');
+    }
+    
+    cb(null, safeFilename);
   }
 });
 

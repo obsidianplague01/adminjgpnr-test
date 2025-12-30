@@ -21,7 +21,7 @@ export const errorHandler = (
 ) => {
   logger.error('Error occurred:', {
     error: err.message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    stack: err.stack, 
     path: req.path,
     method: req.method,
     userId: req.user?.userId,
@@ -32,14 +32,12 @@ export const errorHandler = (
       error: err.message,
     });
   }
-
   const message = process.env.NODE_ENV === 'production'
     ? 'An error occurred'
     : err.message;
     
   return res.status(500).json({ error: message });
 };
-
 export const notFoundHandler = (
   req: Request,
   res: Response,

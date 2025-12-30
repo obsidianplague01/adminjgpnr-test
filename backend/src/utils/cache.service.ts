@@ -169,21 +169,20 @@ export class CacheService {
     }
   }
 
-  async deletePattern(pattern: string): Promise<number> {
-   
-    if (!/^[a-zA-Z0-9:*_-]+$/.test(pattern)) {
-      throw new Error('Invalid cache pattern');
-    }
-
-    const likePattern = pattern.replace(/\*/g, '%');
-
-    const result = await prisma.$executeRaw`
-      DELETE FROM "AnalyticsCache" 
-      WHERE "cacheKey" LIKE ${likePattern}
-    `;
-    
-    return Number(result);
+ async deletePattern(pattern: string): Promise<number> {
+  
+  if (!/^[a-zA-Z0-9:_-]+\*?$/.test(pattern)) {
+    throw new Error('Invalid cache pattern - only alphanumeric, :, _, -, * allowed');
   }
+  const likePattern = pattern.replace(/\*/g, '%').replace(/_/g, '\\_');
+  
+  const result = await prisma.$executeRawUnsafe(
+    'DELETE FROM "AnalyticsCache" WHERE "cacheKey" LIKE $1 ESCAPE \'\\\'',
+    likePattern
+  );
+  
+  return Number(result);
+}
 
   async del(key: string): Promise<boolean> {
     return await this.delete(key);

@@ -12,7 +12,7 @@ import { csrfProtection, getCsrfToken, csrfErrorHandler } from './middleware/csr
 import rateLimit from 'express-rate-limit';
 import * as paymentController from './modules/payment/payment.controller';
 import { Request, Response, NextFunction } from 'express';
-
+import { requestIdMiddleware } from './middleware/requestId';
 import { 
   apiLimiter, 
   authLimiter, 
@@ -53,6 +53,7 @@ const webhookLimiter = rateLimit({
 
 initializeSentry(app);
 const sentryMiddleware = getSentryMiddleware();
+app.use(requestIdMiddleware);
 app.use(sentryMiddleware.requestHandler);
 app.use(sentryMiddleware.tracingHandler);
 
@@ -138,7 +139,8 @@ app.use(cookieParser());
 app.use(sanitizeInput);
 
 if (process.env.TRUST_PROXY === 'true') {
-  app.set('trust proxy', 1);
+  const trustedProxies = process.env.TRUSTED_PROXY_IPS?.split(',') || ['127.0.0.1', '::1'];
+  app.set('trust proxy', (ip: string) => trustedProxies.includes(ip));
 }
 
 app.get('/api/csrf-token', 

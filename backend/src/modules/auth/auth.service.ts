@@ -118,7 +118,10 @@ export class AuthService {
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
       }
     });
-  
+    await prisma.activeSession.deleteMany({
+      where: { userId: user.id }
+    });
+
     return { 
       user: {
         id: user.id,

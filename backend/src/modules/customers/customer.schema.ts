@@ -10,6 +10,7 @@ export const createCustomerSchema = z.object({
     whatsapp: z.string().max(20).optional(),
     location: z.string().min(1, 'Location required').max(200).trim(),
     notes: z.string().max(1000).optional(),
+    
   }),
 });
 

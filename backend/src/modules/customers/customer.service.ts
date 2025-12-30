@@ -13,9 +13,7 @@ import {
 import { AuditLogger, AuditAction, AuditEntity, AuditContext } from '../../utils/audit';
 
 export class CustomerService {
-  /**
-   * Create new customer
-   */
+  
   async createCustomer(data: CreateCustomerInput, context: AuditContext) {
     // Check if customer already exists
     const existing = await prisma.customer.findUnique({
@@ -55,9 +53,6 @@ export class CustomerService {
     return customer;
   }
 
-  /**
-   * List customers with filters
-   */
   async listCustomers(filters: ListCustomersInput) {
     const page = filters.page || 1;
     const limit = Math.min(filters.limit || 20, 100);
@@ -106,9 +101,6 @@ export class CustomerService {
     };
   }
 
-  /**
-   * Get customer by ID
-   */
   async getCustomer(customerId: string) {
     const customer = await prisma.customer.findUnique({
       where: { id: customerId },
@@ -141,9 +133,6 @@ export class CustomerService {
     return customer;
   }
 
-  /**
-   * Get customer by email
-   */
   async getCustomerByEmail(email: string) {
     const customer = await prisma.customer.findUnique({
       where: { email },
@@ -162,11 +151,8 @@ export class CustomerService {
     return customer;
   }
 
-  /**
-   * Update customer
-   */
   async updateCustomer(customerId: string, data: UpdateCustomerInput, context: AuditContext) {
-    // Check if customer exists
+    
     const existing = await prisma.customer.findUnique({
       where: { id: customerId },
     });
@@ -175,7 +161,7 @@ export class CustomerService {
       throw new AppError(404, 'Customer not found');
     }
 
-    // If email is being changed, check uniqueness
+    //  Check email uniqueness if email is being changed
     if (data.email && data.email !== existing.email) {
       const emailExists = await prisma.customer.findUnique({
         where: { email: data.email },
@@ -186,14 +172,35 @@ export class CustomerService {
       }
     }
 
+    //  Check for protected fields
+    const protectedFields = ['totalSpent', 'totalOrders', 'id', 'createdAt', 'updatedAt'];
+    const attemptedProtected = Object.keys(data).filter(k => protectedFields.includes(k));
+    
+    if (attemptedProtected.length > 0) {
+      throw new AppError(400, `Cannot modify protected fields: ${attemptedProtected.join(', ')}`);
+    }
+    
+    //  Build update data explicitly
+    const updateData: Prisma.CustomerUpdateInput = {};
+    
+    if (data.firstName !== undefined) updateData.firstName = data.firstName;
+    if (data.lastName !== undefined) updateData.lastName = data.lastName;
+    if (data.email !== undefined) updateData.email = data.email;
+    if (data.phone !== undefined) updateData.phone = data.phone;
+    if (data.whatsapp !== undefined) updateData.whatsapp = data.whatsapp;
+    if (data.location !== undefined) updateData.location = data.location;
+    if (data.notes !== undefined) updateData.notes = data.notes;
+    if (data.status !== undefined) updateData.status = data.status;
+    
+    // ✅ Update customer
     const customer = await prisma.customer.update({
       where: { id: customerId },
-      data,
+      data: updateData,
     });
 
-    // ✅ Audit log - track what changed
+    //  Track changes
     const changes: any = {};
-    for (const [key, value] of Object.entries(data)) {
+    for (const [key, value] of Object.entries(updateData)) {
       if (existing[key as keyof typeof existing] !== value) {
         changes[key] = {
           from: existing[key as keyof typeof existing],
@@ -202,6 +209,7 @@ export class CustomerService {
       }
     }
 
+    //  Audit log
     await AuditLogger.log({
       action: AuditAction.CUSTOMER_UPDATED,
       entity: AuditEntity.CUSTOMER,
@@ -223,9 +231,6 @@ export class CustomerService {
     return customer;
   }
 
-  /**
-   * Delete customer
-   */
   async deleteCustomer(id: string, context: AuditContext) {
     const customer = await prisma.customer.findUnique({
       where: { id },
@@ -279,9 +284,6 @@ export class CustomerService {
     return { message: 'Customer deleted successfully' };
   }
 
-  /**
-   * Deactivate customer
-   */
   async deactivateCustomer(customerId: string, reason: string, context: AuditContext) {
     const existing = await prisma.customer.findUnique({
       where: { id: customerId },
@@ -328,9 +330,6 @@ export class CustomerService {
     return customer;
   }
 
-  /**
-   * Reactivate customer
-   */
   async reactivateCustomer(customerId: string, reason: string, context: AuditContext) {
     const existing = await prisma.customer.findUnique({
       where: { id: customerId },
@@ -377,9 +376,7 @@ export class CustomerService {
     return customer;
   }
 
-  /**
-   * Get customer stats
-   */
+
   async getCustomerStats() {
     const [total, active, inactive, newThisMonth] = await Promise.all([
       prisma.customer.count(),
@@ -402,9 +399,6 @@ export class CustomerService {
     };
   }
 
-  /**
-   * Get top customers
-   */
   async getTopCustomers(limit = 10) {
     const customers = await prisma.customer.findMany({
       where: {
@@ -427,9 +421,6 @@ export class CustomerService {
     return customers;
   }
 
-  /**
-   * Search customers
-   */
   async searchCustomers(query: string, limit = 10) {
     const customers = await prisma.customer.findMany({
       where: {
@@ -454,9 +445,6 @@ export class CustomerService {
     return customers;
   }
 
-  /**
-   * Get customer orders
-   */
   async getCustomerOrders(customerId: string, page = 1, limit = 20) {
     const skip = (page - 1) * limit;
 
@@ -498,9 +486,6 @@ export class CustomerService {
     };
   }
 
-  /**
-   * Upload customer document
-   */
   async uploadDocument(customerId: string, file: Express.Multer.File, context: AuditContext) {
     const customer = await prisma.customer.findUnique({
       where: { id: customerId },
@@ -555,9 +540,6 @@ export class CustomerService {
     return updated;
   }
 
-  /**
-   * Delete customer document
-   */
   async deleteDocument(customerId: string, context: AuditContext) {
     const customer = await prisma.customer.findUnique({
       where: { id: customerId },
@@ -612,9 +594,6 @@ export class CustomerService {
     return updated;
   }
 
-  /**
-   * Get customer document
-   */
   async getDocument(customerId: string, context: AuditContext) {
     const customer = await prisma.customer.findUnique({
       where: { id: customerId },
