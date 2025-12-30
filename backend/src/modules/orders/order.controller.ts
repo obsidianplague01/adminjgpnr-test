@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { OrderService } from './order.service';
 import { asyncHandler } from '../../middleware/errorHandler';
 import { AppError } from '../../middleware/errorHandler';
+import { RefundOrderInput } from './order.schema';
 
 const orderService = new OrderService();
 
@@ -236,13 +237,28 @@ export const getRevenueBreakdown = asyncHandler(async (req: Request, res: Respon
     groupBy,
     revenue: stats.revenue,
     orders: stats.completed,
-    // Add more detailed breakdown here
+
   });
 });
 
-export const refundOrder = asyncHandler(async (req: Request, _res: Response) => {
-  throw new AppError(501, 'Refund functionality not yet implemented');
+export const refundOrder = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const data: RefundOrderInput = req.body;
+  
+  if (!req.user) {
+    throw new AppError(401, 'Authentication required');
+  }
+  
+  const result = await orderService.refundOrder(
+    id,
+    data,
+    req.user.userId,
+    req.ip
+  );
+  
+  res.json(result);
 });
+
 
 export const markAsFraud = asyncHandler(async (req: Request, res: Response) => {
   const { reason } = req.body;

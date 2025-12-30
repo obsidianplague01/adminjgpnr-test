@@ -124,6 +124,9 @@ export const deleteDocument = asyncHandler(async (req: Request, res: Response) =
 export const downloadDocument = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const context = extractAuditContext(req);
+  if (!req.user) {
+    throw new AppError(401, 'Authentication required');
+  }
   
   const customer = await prisma.customer.findUnique({
     where: { id },

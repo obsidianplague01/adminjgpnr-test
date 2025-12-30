@@ -20,7 +20,7 @@ router.get('/entity/:entity/:entityId', auditController.getEntityHistory);
 router.get('/security-events', auditController.getSecurityEvents);
 
 router.get('/export',
-  authorize([UserRole.SUPER_ADMIN]),
+  authorize(UserRole.SUPER_ADMIN),
   auditController.exportAuditLogs
 );
 

@@ -26,6 +26,21 @@ enum TicketStatus {
   EXPIRED
   PENDING
 }
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RefundReason {
+  CUSTOMER_REQUEST
+  DUPLICATE_PAYMENT
+  EVENT_CANCELLED
+  FRAUD
+  OTHER
+}
 
 
 enum CampaignStatus {
@@ -120,7 +135,7 @@ model Order {
   
   customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
   tickets       Ticket[]
-  
+  refunds         Refund[]
   paymentStatus String? @default("pending")
   paymentMethod String?
   paidAmount    Decimal? @db.Decimal(10, 2)
@@ -134,6 +149,32 @@ model Order {
   @@index([createdAt, status])
   @@index([paidAt])  
   @@map("orders")
+}
+model Refund {
+  id              String        @id @default(cuid())
+  orderId         String
+  amount          Decimal       @db.Decimal(10, 2)
+  reason          RefundReason
+  reasonDetails   String?
+  status          RefundStatus  @default(PENDING)
+  refundReference String?       @unique
+  processedAt     DateTime?
+  failureReason   String?
+  initiatedBy     String?       // userId who initiated
+  
+  paymentGateway  String        @default("paystack")
+  gatewayResponse Json?
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  @@index([orderId])
+  @@index([status])
+  @@index([refundReference])
+  @@index([createdAt])
+  @@map("refunds")
 }
 
 model Ticket {

@@ -2,6 +2,7 @@
 import express from 'express';
 import { authenticate, requireAdmin, requireStaff, requireSuperAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
+import { refundOrderSchema } from './order.schema';
 import { apiLimiter } from '../../middleware/rateLimit';
 import { csrfProtection } from '../../middleware/csrf';
 import * as orderController from './order.controller';
@@ -116,6 +117,13 @@ router.get(
   requireAdmin,
   apiLimiter,
   orderController.exportOrdersCSV
+);
+router.post(
+  '/:id/refund',
+  authenticate,
+  requireAdmin, 
+  validate(refundOrderSchema),
+  orderController.refundOrder
 );
 
 router.post(

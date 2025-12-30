@@ -67,7 +67,24 @@ export const bulkCreateOrdersSchema = z.object({
     ).min(1).max(50),
   }),
 });
+export const refundOrderSchema = z.object({
+  body: z.object({
+    amount: z.number().positive().optional(), // Partial refund support
+    reason: z.enum([
+      'CUSTOMER_REQUEST',
+      'DUPLICATE_PAYMENT',
+      'EVENT_CANCELLED',
+      'FRAUD',
+      'OTHER'
+    ]),
+    reasonDetails: z.string().min(10).max(500),
+  }),
+  params: z.object({
+    id: z.string().cuid('Invalid order ID'),
+  }),
+});
 
+export type RefundOrderInput = z.infer<typeof refundOrderSchema>['body'];
 // Type exports
 export type CreateOrderInput = z.infer<typeof createOrderSchema>['body'];
 export type UpdateOrderInput = z.infer<typeof updateOrderSchema>['body'];

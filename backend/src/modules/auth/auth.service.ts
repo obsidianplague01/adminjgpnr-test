@@ -1,5 +1,5 @@
 // src/modules/auth/auth.service.ts
-import jwt from 'jsonwebtoken';
+import * as jwt from 'jsonwebtoken';
 import { accountLockout } from '../../middleware/rateLimit';
 import bcrypt from 'bcrypt';
 import prisma from '../../config/database';
@@ -53,8 +53,9 @@ export interface LoginResponse {
   accessToken: string;
   refreshToken: string;
 }
+
 export class AuthService {
-  async login(data: LoginInput): Promise<LoginResponse> {
+  async login(data: LoginInput, ipAddress?: string, userAgent?: string): Promise<LoginResponse> {
     const lockoutStatus = await accountLockout(data.email, false);
   
     if (lockoutStatus.locked) {
@@ -74,7 +75,6 @@ export class AuthService {
     const isValidPassword = await bcrypt.compare(data.password, user.password);
   
     if (!isValidPassword) {
-      
       await accountLockout(data.email, false);
       throw new AppError(401, 'Invalid credentials');
     }
@@ -90,15 +90,20 @@ export class AuthService {
       userId: user.id,
       email: user.email,
       role: user.role,
+      tokenVersion: user.tokenVersion, 
     };
 
-    const accessToken = jwt.sign(payload, process.env.JWT_SECRET!, {
-      expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m'
-    });
+    const accessToken = jwt.sign(
+      payload, 
+      process.env.JWT_SECRET as string,
+      { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' } as jwt.SignOptions
+    );
 
-    const refreshToken = jwt.sign({ userId: user.id }, process.env.JWT_REFRESH_SECRET!, {
-      expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d'
-    });
+    const refreshToken = jwt.sign(
+      { userId: user.id }, 
+      process.env.JWT_REFRESH_SECRET as string,
+      { expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d' } as jwt.SignOptions
+    );
 
     logger.info(`User logged in: ${user.email}`);
     const sessionId = crypto.randomBytes(32).toString('hex');
@@ -108,14 +113,23 @@ export class AuthService {
         id: sessionId,
         userId: user.id,
         token: accessToken,
-        ipAddress: ipAddress || 'unknown',
-        userAgent: userAgent || 'unknown',
+        ipAddress: ipAddress || 'unknown', 
+        userAgent: userAgent || 'unknown',  
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
       }
     });
   
-    return { user, accessToken, refreshToken };
-
+    return { 
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      },
+      accessToken, 
+      refreshToken 
+    };
   }
 
   async refreshToken(token: string) {
@@ -130,14 +144,16 @@ export class AuthService {
     const tokenExp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
     await blacklistToken(token, tokenExp - Math.floor(Date.now() / 1000));
     
-    const newRefreshToken = jwt.sign({ userId: user.id }, process.env.JWT_REFRESH_SECRET!, {
-    expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d'
-    });
-    
+    const newRefreshToken = jwt.sign(
+      { userId: user.id }, 
+      process.env.JWT_REFRESH_SECRET as string,
+      { expiresIn: process.env.JWT_REFRESH_EXPIRY || '7d' } as jwt.SignOptions
+    );
+
     const accessToken = jwt.sign(
       { userId: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion },
-      process.env.JWT_SECRET!,
-      { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' }
+      process.env.JWT_SECRET as string,
+      { expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m' } as jwt.SignOptions
     );
     
     return { accessToken, refreshToken: newRefreshToken };

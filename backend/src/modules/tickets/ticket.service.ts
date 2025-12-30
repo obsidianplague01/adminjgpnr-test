@@ -4,7 +4,6 @@ import prisma from '../../config/database';
 import { monitoring } from '../../utils/monitoring.service';
 import { AppError } from '../../middleware/errorHandler';
 import { AuditLogger, AuditAction, AuditEntity, AuditContext } from '../../utils/audit';
-import crypto from 'crypto';
 import {
   CreateTicketInput,
   UpdateTicketInput,
@@ -22,26 +21,9 @@ import {
 } from '../../utils/ticket.utils';
 import { logger } from '../../utils/logger';
 
-function generateSecureCode(length: number, charset: string): string {
-  const result: string[] = [];
-  const randomBytes = crypto.randomBytes(length * 2);
-  
-  let cursor = 0;
-  while (result.length < length && cursor < randomBytes.length) {
-    const byte = randomBytes[cursor];
-    if (byte < charset.length * Math.floor(256 / charset.length)) {
-      result.push(charset[byte % charset.length]);
-    }
-    cursor++;
-  }
-  
-  return result.join('');
-}
 
 export class TicketService {
-  /**
-   * Create tickets
-   */
+ 
   async createTickets(data: CreateTicketInput, context: AuditContext) {
     const order = await prisma.order.findUnique({
       where: { id: data.orderId },
